@@ -1,0 +1,4 @@
+- hydra
+- ocean4dvarnet
+- torch
+- pytorch-lightning
