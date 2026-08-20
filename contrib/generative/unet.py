@@ -1,11 +1,13 @@
 import torch
 import torch.nn as nn
 
-from src.model.layers import ConvDownBlock, \
+from contrib.generative.model_utils import ConvDownBlock, \
     AttentionDownBlock, \
     AttentionUpBlock, \
     TransformerPositionalEmbedding, \
-    ConvUpBlock
+    ConvUpBlock, \
+    pad_to, \
+    unpad
 
 
 class UNet(nn.Module):
@@ -13,7 +15,7 @@ class UNet(nn.Module):
     Model architecture as described in the DDPM paper, Appendix, section B
     """
 
-    def __init__(self, image_size=256, input_channels=3):
+    def __init__(self, image_size=256, input_channels=3, output_channels=3, max_steps=100):
         super().__init__()
         # 1. We replaced weight normalization with group normalization
         # 2. Our 32x32 models use four feature map resolutions (32x32 to 4x4), and our 256x256 models use six (I made 5)
@@ -24,7 +26,7 @@ class UNet(nn.Module):
 
         self.initial_conv = nn.Conv2d(in_channels=input_channels, out_channels=128, kernel_size=3, stride=1, padding='same')
         self.positional_encoding = nn.Sequential(
-            TransformerPositionalEmbedding(dimension=128),
+            TransformerPositionalEmbedding(dimension=128, max_steps=max_steps),
             nn.Linear(128, 128 * 4),
             nn.GELU(),
             nn.Linear(128 * 4, 128 * 4)
@@ -51,26 +53,38 @@ class UNet(nn.Module):
         self.output_conv = nn.Sequential(
             nn.GroupNorm(num_channels=256, num_groups=32),
             nn.SiLU(),
-            nn.Conv2d(256, 3, 3, padding=1)
+            nn.Conv2d(256, output_channels, 3, padding=1)
         )
 
-    def forward(self, input_tensor, time):
-        time_encoded = self.positional_encoding(time)
+    def forward(self, xt, y, t):
+        #xt = xt.unsqueeze(dim=1)
+        #y = y.unsqueeze(dim=1)
+
+        input_tensor = torch.concat((xt, y), dim=1)
+
+        time_encoded = self.positional_encoding(t)
 
         initial_x = self.initial_conv(input_tensor)
 
         states_for_skip_connections = [initial_x]
 
+        pads = []
+
         x = initial_x
         for i, block in enumerate(self.downsample_blocks):
+            #print('block: {}, x: {}'.format(i, x.size()))
             x = block(x, time_encoded)
+            x, pad = pad_to(x, stride=2)
+            pads.append(pad)
             states_for_skip_connections.append(x)
         states_for_skip_connections = list(reversed(states_for_skip_connections))
+        pads = list(reversed(pads))
 
         x = self.bottleneck(x, time_encoded)
 
-        for i, (block, skip) in enumerate(zip(self.upsample_blocks, states_for_skip_connections)):
+        for i, (block, skip, pad) in enumerate(zip(self.upsample_blocks, states_for_skip_connections, pads)):
             x = torch.cat([x, skip], dim=1)
+            x = unpad(x, pad)
             x = block(x, time_encoded)
 
         # Concat initial_conv with tensor

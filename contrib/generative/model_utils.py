@@ -7,11 +7,11 @@ class TransformerPositionalEmbedding(nn.Module):
     """
     From paper "Attention Is All You Need", section 3.5
     """
-    def __init__(self, dimension, max_timesteps=1000):
+    def __init__(self, dimension, max_steps=1000):
         super(TransformerPositionalEmbedding, self).__init__()
         assert dimension % 2 == 0, "Embedding dimension must be even"
         self.dimension = dimension
-        self.pe_matrix = torch.zeros(max_timesteps, dimension)
+        self.pe_matrix = torch.zeros(max_steps, dimension)
         # Gather all the even dimensions across the embedding vector
         even_indices = torch.arange(0, self.dimension, 2)
         # Calculate the term using log transforms for faster calculations
@@ -20,13 +20,13 @@ class TransformerPositionalEmbedding(nn.Module):
         div_term = torch.exp(even_indices * -log_term)
 
         # Precompute positional encoding matrix based on odd/even timesteps
-        timesteps = torch.arange(max_timesteps).unsqueeze(1)
+        timesteps = torch.arange(max_steps).unsqueeze(1)
         self.pe_matrix[:, 0::2] = torch.sin(timesteps * div_term)
         self.pe_matrix[:, 1::2] = torch.cos(timesteps * div_term)
 
     def forward(self, timestep):
         # [bs, d_model]
-        return self.pe_matrix[timestep].to(timestep.device)
+        return self.pe_matrix[timestep.cpu()].to(timestep.device)
 
 
 class ConvBlock(nn.Module):
@@ -51,7 +51,6 @@ class DownsampleBlock(nn.Module):
     def forward(self, input_tensor):
         x = self.conv(input_tensor)
         return x
-
 
 class UpsampleBlock(nn.Module):
     def __init__(self, in_channels, out_channels, scale_factor=2.0):
@@ -332,3 +331,31 @@ class ResNetBlock(nn.Module):
 
         x = self.block2(x)
         return x + self.residual_conv(input_tensor)
+    
+def pad_to(x, stride):
+    h, w = x.shape[-2:]
+
+    if h % stride > 0:
+        new_h = h + stride - h % stride
+    else:
+        new_h = h
+    if w % stride > 0:
+        new_w = w + stride - w % stride
+    else:
+        new_w = w
+    lh, uh = int((new_h-h) / 2), int(new_h-h) - int((new_h-h) / 2)
+    lw, uw = int((new_w-w) / 2), int(new_w-w) - int((new_w-w) / 2)
+    pads = (lw, uw, lh, uh)
+
+    # zero-padding by default.
+    # See others at https://pytorch.org/docs/stable/nn.functional.html#torch.nn.functional.pad
+    out = F.pad(x, pads, "constant", 0)
+
+    return out, pads
+
+def unpad(x, pad):
+    if pad[2]+pad[3] > 0:
+        x = x[:,:,pad[2]:-pad[3],:]
+    if pad[0]+pad[1] > 0:
+        x = x[:,:,:,pad[0]:-pad[1]]
+    return x
