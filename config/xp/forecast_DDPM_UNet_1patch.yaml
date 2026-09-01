@@ -29,7 +29,7 @@ trainer:
   inference_mode: False
   gradient_clip_val: 0.5
   accelerator: gpu
-  devices: 1
+  devices: 2
   logger:
     _target_: pytorch_lightning.loggers.CSVLogger
     save_dir: ${hydra:runtime.output_dir}
@@ -48,9 +48,9 @@ datamodule:
   _target_: contrib.glorys12.DistinctNormDataModule
   input_da: 
     _target_: contrib.glorys12.load_glorys12_data_on_fly_inp
-    tgt_path: /SCRATCH/p24hasle/Dataset/glorys12_2010_2019_daily_sla_4th_float32.nc
+    tgt_path: /Odyssey/public/glorys/reanalysis/glorys12_2010_2019_daily_sla_4th_float32.nc #</SCRATCH/p24hasle/Dataset/glorys12_2010_2019_daily_sla_4th_float32.nc
     tgt_var: sla
-    inp_path: /SCRATCH/p24hasle/Dataset/mask_6nadirs_4th.nc
+    inp_path: /Odyssey/public/glorys/obs_masks/global_obs_6sats_masks_2022.pickle #SCRATCH/p24hasle/Dataset/mask_6nadirs_4th.nc
     inp_var: inp
   domains:
     train:
