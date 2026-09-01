@@ -3,6 +3,7 @@ Learning GLORYS12 data
 """
 
 import functools as ft
+import pickle
 import time
 
 import numpy as np
@@ -250,6 +251,39 @@ def load_glorys12_data_on_fly_inp(
     print('..... Obs dataset')
 
     return tgt, inp
+
+def load_glorys12_data_on_fly_inp_pickle_mask(
+    tgt_path,
+    inp_path,
+    tgt_var="zos",
+):
+    """
+    Like load_glorys12_data_on_fly_inp, but the obs mask is a pickled list of
+    daily (lat, lon) arrays (1.0 = observed, NaN = unobserved) instead of a
+    netCDF file. Returns (tgt, mask) where mask is a boolean (time, lat, lon)
+    DataArray consumed by DistinctNormDataModule/LazyXrDataset, which already
+    cycles it over `time % len(mask)` to build pseudo-observations on the fly.
+    """
+
+    print('..... Start lazy loading', flush=True)
+
+    tgt = xr.open_dataset(tgt_path)[tgt_var]
+    print('..... GT dataset')
+
+    if list(tgt.coords)[1] == 'latitude':
+        tgt = tgt.rename(latitude="lat", longitude="lon")
+
+    with open(inp_path, "rb") as f:
+        daily_masks = pickle.load(f)
+
+    mask = xr.DataArray(
+        ~np.isnan(np.stack(daily_masks, axis=0)),
+        dims=("time", "lat", "lon"),
+        coords={"lat": tgt.lat.values, "lon": tgt.lon.values},
+    )
+    print('..... Obs mask (pickle, cyclic over', mask.sizes["time"], 'days)')
+
+    return tgt, mask
 
 def train(trainer, dm, lit_mod, ckpt=None):
     if trainer.logger is not None:
