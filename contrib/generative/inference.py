@@ -226,9 +226,24 @@ def combine_leadtime_files(out_dir, leadtimes=range(7)):
     return written
 
 
-def estimate_obs_conditioned_residual_variance(
-    tgt_da, mask_da, norm_stats, num_days=30, seed=0, utils_dir=None
-):
+def gauss_seidel_fill_2d(values, max_iterations=2000, epsilon=1e-4, relaxation=1.0):
+    """
+    Fill NaN gaps in a 2D array via Gauss-Seidel relaxation, using the
+    current pyinterp.fill.gauss_seidel API (operates on a plain ndarray
+    in-place, returns (iterations, residual) -- not the Grid2D-wrapper
+    API that python_scripts/utils/data_utils.py's remove_nan targets,
+    which is stale against pyinterp>=2026.x installed in this env).
+    """
+    import pyinterp.fill
+
+    grid = np.array(values, dtype=np.float64, copy=True)
+    pyinterp.fill.gauss_seidel(
+        grid, max_iterations=max_iterations, epsilon=epsilon, relaxation=relaxation
+    )
+    return grid
+
+
+def estimate_obs_conditioned_residual_variance(tgt_da, mask_da, norm_stats, num_days=30, seed=0):
     """
     Empirical proxy for the irreducible val_loss floor near t=0 -- i.e.
     Var(tgt | sparse obs), the part of the loss no model can beat no matter
@@ -236,10 +251,9 @@ def estimate_obs_conditioned_residual_variance(
     about tgt beyond what the observation network constrains.
 
     Reconstructs `num_days` randomly sampled days from their sparse 6-nadir
-    mask using Gauss-Seidel gap filling -- the same classical baseline
-    already used in this repo (python_scripts/utils/data_utils.py's
-    remove_nan) -- and reports the residual MSE against the true field, in
-    the same normalized units as the training loss (divided by
+    mask using Gauss-Seidel gap filling (gauss_seidel_fill_2d above), and
+    reports the residual MSE against the true field, in the same
+    normalized units as the training loss (divided by
     datamodule.norm_stats.train's std, like tgt/input are normalized
     before reaching GenFlowLit).
 
@@ -248,12 +262,6 @@ def estimate_obs_conditioned_residual_variance(
     priors, not just a smoothness prior) or worse (if underfit). It gives
     a concrete, reproducible order of magnitude rather than a guess.
     """
-    import sys
-
-    if utils_dir is not None:
-        sys.path.insert(0, str(utils_dir))
-    from data_utils import remove_nan  # reuses this repo's tested Gauss-Seidel fill
-
     m, s = norm_stats
     rng = np.random.default_rng(seed)
     n_days = tgt_da.sizes["time"]
@@ -264,12 +272,12 @@ def estimate_obs_conditioned_residual_variance(
     for i in sample_idx:
         truth = tgt_da.isel(time=int(i)).load()
         day_mask = mask_da.isel(time=int(i) % n_mask_days)
-        obs = truth.where(day_mask.values).copy()
+        obs_values = truth.where(day_mask.values).values
 
-        filled = remove_nan(obs, ("lat", "lon"))
+        filled_values = gauss_seidel_fill_2d(obs_values)
 
         truth_n = (truth.values - m) / s
-        filled_n = (filled.values - m) / s
+        filled_n = (filled_values - m) / s
         sq_errors.append((filled_n - truth_n) ** 2)
 
     sq_errors = np.concatenate([e.ravel() for e in sq_errors])

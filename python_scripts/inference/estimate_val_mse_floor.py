@@ -72,7 +72,6 @@ result = estimate_obs_conditioned_residual_variance(
     norm_stats,
     num_days=NUM_DAYS,
     seed=SEED,
-    utils_dir=REPO_ROOT / "python_scripts" / "utils",
 )
 
 print()
