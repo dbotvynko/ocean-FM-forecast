@@ -36,7 +36,7 @@ CKPT_PATH = (
     "/Odyssey/private/d21botvy/forecast/ocean-DDPMs/outputs/2026-09-01/13-42-20/"
     "forecast_DDPM_UNet_1patch/checkpoints/val_loss=0.01317-epoch=084.ckpt"
 )
-NRT_2023_PATH = "/Odyssey/public/altimetry_traces/nrt_2023_global_4/gridded/gridded_input.nc"
+NRT_2023_PATH = "/Odyssey/public/altimetry_traces/nrt_sla/2023/gridded_input.nc"
 NRT_2023_VAR = "sla_unfiltered"
 OUT_DIR = "/Odyssey/private/d21botvy/forecast/ocean-DDPMs/outputs/eval_nrt2023_fm_unet/"
 LEADTIMES = range(7)
@@ -51,7 +51,15 @@ model = load_gen_flow_checkpoint(model, CKPT_PATH)
 norm_stats = tuple(cfg.datamodule.norm_stats.train)
 patch_time = cfg.datamodule.xrds_kw.train.patch_dims.time
 
-sla_da = load_gridded_sla(NRT_2023_PATH, var=NRT_2023_VAR)
+# The raw NRT product is on the full global grid (lat=720); crop it to the
+# same domain.train window (lat=680) the model was trained on.
+domain_train = hydra.utils.instantiate(cfg.domain.train)
+sla_da = load_gridded_sla(
+    NRT_2023_PATH,
+    var=NRT_2023_VAR,
+    lat_slice=domain_train["lat"],
+    lon_slice=domain_train["lon"],
+)
 
 start_dates = pd.date_range("2023-01-01", periods=365 - patch_time + 1, freq="D")
 

@@ -25,12 +25,20 @@ PATCH_TIME_DEFAULT = 29
 InferenceItem = namedtuple("InferenceItem", ["input"])
 
 
-def load_gridded_sla(path, var="sla_unfiltered"):
-    """Load a gridded (already on-model-grid) SLA product, renaming lat/lon if needed."""
+def load_gridded_sla(path, var="sla_unfiltered", lat_slice=None, lon_slice=None):
+    """
+    Load a gridded SLA product, renaming lat/lon if needed and optionally
+    cropping to the (lat_slice, lon_slice) domain the model was trained on
+    (e.g. the raw product may cover the full global grid while the model
+    expects the domain.train crop).
+    """
     ds = xr.open_dataset(path)
     if list(ds.coords)[1] == "latitude":
         ds = ds.rename(latitude="lat", longitude="lon")
-    return ds[var]
+    da = ds[var]
+    if lat_slice is not None or lon_slice is not None:
+        da = da.sel(lat=lat_slice or slice(None), lon=lon_slice or slice(None))
+    return da
 
 
 def load_gen_flow_checkpoint(model, ckpt_path, device="cuda"):
