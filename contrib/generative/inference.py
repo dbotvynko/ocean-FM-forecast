@@ -182,3 +182,36 @@ class YearlyLeadtimeEvaluator:
                 self.day_result_to_dataset(start_date, day_result).to_netcdf(out_path)
 
         return rmses
+
+
+def combine_leadtime_files(out_dir, leadtimes=range(7)):
+    """
+    Combine the per-day .nc files written by YearlyLeadtimeEvaluator.run_year
+    (each holding all leadtimes for one window) into one file per lead time,
+    concatenated over every day found in out_dir along a new `time`
+    dimension (each day's valid_time for that lead time).
+
+    Safe to call at any point during a run_year (e.g. in another job) --
+    it just picks up whichever per-day files exist in out_dir so far, so you
+    don't have to wait for the full year to inspect leadtime 0 across the
+    days already computed. Re-run once the year finishes for the complete
+    set of leadtime_<lt>.nc files.
+    """
+    out_dir = Path(out_dir)
+    day_paths = sorted(out_dir.glob("????-??-??.nc"))
+
+    written = {}
+    for lt in leadtimes:
+        slices = []
+        for p in day_paths:
+            with xr.open_dataset(p) as ds:
+                day_slice = ds.sel(leadtime=lt, drop=True).load()
+            valid_time = day_slice["valid_time"].item()
+            slices.append(day_slice.drop_vars("valid_time").expand_dims(time=[valid_time]))
+
+        combined = xr.concat(slices, dim="time").sortby("time")
+        out_path = out_dir / f"leadtime_{lt}.nc"
+        combined.to_netcdf(out_path)
+        written[lt] = out_path
+
+    return written
