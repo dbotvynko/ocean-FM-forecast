@@ -213,9 +213,14 @@ def combine_leadtime_files(out_dir, leadtimes=range(7)):
         for p in day_paths:
             with xr.open_dataset(p) as ds:
                 obs_days = ds.attrs["obs_days"]
-                day_slice = ds.sel(leadtime=lt, drop=True).load()
+                # NB: no drop=True here -- it would also drop valid_time,
+                # since it's only indexed along the leadtime dimension and
+                # becomes scalar as a side effect of this selection too.
+                day_slice = ds.sel(leadtime=lt).load()
             valid_time = day_slice["valid_time"].item()
-            slices.append(day_slice.drop_vars("valid_time").expand_dims(time=[valid_time]))
+            slices.append(
+                day_slice.drop_vars(["valid_time", "leadtime"]).expand_dims(time=[valid_time])
+            )
 
         combined = xr.concat(slices, dim="time").sortby("time")
         window_idx = obs_days + lt
