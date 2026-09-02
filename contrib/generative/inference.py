@@ -286,3 +286,60 @@ def estimate_obs_conditioned_residual_variance(tgt_da, mask_da, norm_stats, num_
         rmse_normalized=float(np.sqrt(np.nanmean(sq_errors))),
         num_days=len(sample_idx),
     )
+
+
+def estimate_persistence_forecast_floor(
+    tgt_da,
+    mask_da,
+    norm_stats,
+    leadtimes=range(7),
+    num_windows=30,
+    seed=0,
+    patch_time=PATCH_TIME_DEFAULT,
+):
+    """
+    Persistence-forecast baseline: reconstruct the last observed day (via
+    its own sparse mask + Gauss-Seidel gap fill) and forecast every
+    requested lead time as that same, unchanged field. This is the
+    standard reference in forecast verification ("skill relative to
+    persistence") -- unlike estimate_obs_conditioned_residual_variance, it
+    does use temporal information (the trajectory up to the last observed
+    day informs which day gets fixed and filled), it's just naive about
+    how the field evolves afterward (assumes no change).
+
+    Uses the same window/leadtime convention as YearlyLeadtimeEvaluator
+    (obs_days = patch_time // 2, leadtime 0 = first forecast day), so its
+    per-leadtime RMSEs are directly comparable to a model's
+    test_leadtime_<idx>.nc rmse values.
+    """
+    m, s = norm_stats
+    rng = np.random.default_rng(seed)
+    obs_days = patch_time // 2
+    n_days = tgt_da.sizes["time"]
+    n_mask_days = mask_da.sizes["time"]
+
+    max_start = n_days - patch_time
+    start_idx = rng.choice(max_start + 1, size=min(num_windows, max_start + 1), replace=False)
+
+    sq_errors = {lt: [] for lt in leadtimes}
+    for start in start_idx:
+        last_obs_idx = int(start) + obs_days - 1
+        last_obs = tgt_da.isel(time=last_obs_idx).load()
+        last_obs_mask = mask_da.isel(time=last_obs_idx % n_mask_days)
+        obs_values = last_obs.where(last_obs_mask.values).values
+
+        persisted_n = (gauss_seidel_fill_2d(obs_values) - m) / s
+
+        for lt in leadtimes:
+            target_idx = int(start) + obs_days + lt
+            truth_n = (tgt_da.isel(time=target_idx).values - m) / s
+            sq_errors[lt].append((persisted_n - truth_n) ** 2)
+
+    result = {}
+    for lt in leadtimes:
+        errs = np.concatenate([e.ravel() for e in sq_errors[lt]])
+        result[lt] = dict(
+            mean_sq_error=float(np.nanmean(errs)),
+            rmse_normalized=float(np.sqrt(np.nanmean(errs))),
+        )
+    return result
