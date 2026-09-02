@@ -163,6 +163,7 @@ class YearlyLeadtimeEvaluator:
                 lon=lon,
                 init_time=start_date,
             ),
+            attrs=dict(obs_days=obs_days),
         )
 
     def run_year(self, start_dates, out_dir=None):
@@ -191,11 +192,16 @@ def combine_leadtime_files(out_dir, leadtimes=range(7)):
     concatenated over every day found in out_dir along a new `time`
     dimension (each day's valid_time for that lead time).
 
+    Output files are named test_leadtime_<idx>.nc, where <idx> is the
+    absolute window index (obs_days + leadtime, e.g. 14 for leadtime 0,
+    20 for leadtime 6) -- the same convention already used elsewhere in
+    this repo (perturb_gen_eval.py's `for LEADTIME in range(14, 21)`).
+
     Safe to call at any point during a run_year (e.g. in another job) --
     it just picks up whichever per-day files exist in out_dir so far, so you
     don't have to wait for the full year to inspect leadtime 0 across the
     days already computed. Re-run once the year finishes for the complete
-    set of leadtime_<lt>.nc files.
+    set of files.
     """
     out_dir = Path(out_dir)
     day_paths = sorted(out_dir.glob("????-??-??.nc"))
@@ -203,14 +209,17 @@ def combine_leadtime_files(out_dir, leadtimes=range(7)):
     written = {}
     for lt in leadtimes:
         slices = []
+        obs_days = None
         for p in day_paths:
             with xr.open_dataset(p) as ds:
+                obs_days = ds.attrs["obs_days"]
                 day_slice = ds.sel(leadtime=lt, drop=True).load()
             valid_time = day_slice["valid_time"].item()
             slices.append(day_slice.drop_vars("valid_time").expand_dims(time=[valid_time]))
 
         combined = xr.concat(slices, dim="time").sortby("time")
-        out_path = out_dir / f"leadtime_{lt}.nc"
+        window_idx = obs_days + lt
+        out_path = out_dir / f"test_leadtime_{window_idx}.nc"
         combined.to_netcdf(out_path)
         written[lt] = out_path
 
