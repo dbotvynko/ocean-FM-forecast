@@ -217,12 +217,19 @@ def combine_leadtime_files(out_dir, leadtimes=range(7)):
                 # since it's only indexed along the leadtime dimension and
                 # becomes scalar as a side effect of this selection too.
                 day_slice = ds.sel(leadtime=lt).load()
-            valid_time = day_slice["valid_time"].item()
+            # NB: NOT .item() -- numpy's datetime64[ns].item() returns a
+            # plain int (ns since epoch), since Python's datetime.datetime
+            # can't hold nanosecond precision. That silently produced an
+            # integer `time` coordinate instead of datetime64, breaking
+            # `.dt` accessors downstream. .values + pd.Timestamp keeps it
+            # a real datetime.
+            valid_time = pd.Timestamp(day_slice["valid_time"].values)
             slices.append(
                 day_slice.drop_vars(["valid_time", "leadtime"]).expand_dims(time=[valid_time])
             )
 
         combined = xr.concat(slices, dim="time").sortby("time")
+        combined = combined.assign_coords(time=pd.DatetimeIndex(combined.time.values))
         window_idx = obs_days + lt
         out_path = out_dir / f"test_leadtime_{window_idx}.nc"
         combined.to_netcdf(out_path)
