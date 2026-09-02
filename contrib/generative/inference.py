@@ -224,3 +224,57 @@ def combine_leadtime_files(out_dir, leadtimes=range(7)):
         written[lt] = out_path
 
     return written
+
+
+def estimate_obs_conditioned_residual_variance(
+    tgt_da, mask_da, norm_stats, num_days=30, seed=0, utils_dir=None
+):
+    """
+    Empirical proxy for the irreducible val_loss floor near t=0 -- i.e.
+    Var(tgt | sparse obs), the part of the loss no model can beat no matter
+    how well trained, since at t=0 the network sees x0 exactly but nothing
+    about tgt beyond what the observation network constrains.
+
+    Reconstructs `num_days` randomly sampled days from their sparse 6-nadir
+    mask using Gauss-Seidel gap filling -- the same classical baseline
+    already used in this repo (python_scripts/utils/data_utils.py's
+    remove_nan) -- and reports the residual MSE against the true field, in
+    the same normalized units as the training loss (divided by
+    datamodule.norm_stats.train's std, like tgt/input are normalized
+    before reaching GenFlowLit).
+
+    This is only a proxy, not the model's actual achievable floor: a
+    trained network may do better (it can use learned spatio-temporal
+    priors, not just a smoothness prior) or worse (if underfit). It gives
+    a concrete, reproducible order of magnitude rather than a guess.
+    """
+    import sys
+
+    if utils_dir is not None:
+        sys.path.insert(0, str(utils_dir))
+    from data_utils import remove_nan  # reuses this repo's tested Gauss-Seidel fill
+
+    m, s = norm_stats
+    rng = np.random.default_rng(seed)
+    n_days = tgt_da.sizes["time"]
+    n_mask_days = mask_da.sizes["time"]
+    sample_idx = rng.choice(n_days, size=min(num_days, n_days), replace=False)
+
+    sq_errors = []
+    for i in sample_idx:
+        truth = tgt_da.isel(time=int(i)).load()
+        day_mask = mask_da.isel(time=int(i) % n_mask_days)
+        obs = truth.where(day_mask.values).copy()
+
+        filled = remove_nan(obs, ("lat", "lon"))
+
+        truth_n = (truth.values - m) / s
+        filled_n = (filled.values - m) / s
+        sq_errors.append((filled_n - truth_n) ** 2)
+
+    sq_errors = np.concatenate([e.ravel() for e in sq_errors])
+    return dict(
+        mean_sq_error=float(np.nanmean(sq_errors)),
+        rmse_normalized=float(np.sqrt(np.nanmean(sq_errors))),
+        num_days=len(sample_idx),
+    )
