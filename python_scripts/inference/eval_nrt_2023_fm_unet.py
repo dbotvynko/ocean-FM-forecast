@@ -21,7 +21,7 @@ from pathlib import Path
 import hydra
 import numpy as np
 import pandas as pd
-from hydra import compose, initialize
+from hydra import compose, initialize_config_dir
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
@@ -42,7 +42,7 @@ OUT_DIR = "/Odyssey/private/d21botvy/forecast/ocean-DDPMs/outputs/eval_nrt2023_f
 LEADTIMES = range(7)
 NUM_SAMPLES = 1
 
-with initialize(version_base="1.3", config_path=str(REPO_ROOT / "config")):
+with initialize_config_dir(version_base="1.3", config_dir=str(REPO_ROOT / "config")):
     cfg = compose(config_name="main", overrides=["xp=forecast_DDPM_UNet_1patch"])
 
 model = hydra.utils.instantiate(cfg.model)
