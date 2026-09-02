@@ -92,5 +92,8 @@ out["vgosa"] = (("time", "lat", "lon"), vgosa.astype(np.float32))
 out["mdt_u"] = (("time", "lat", "lon"), mdt_u)
 out["mdt_v"] = (("time", "lat", "lon"), mdt_v)
 
-out.to_netcdf(OUT_PATH)
+# zlib compression (netcdf4 backend) -- to_netcdf writes uncompressed by
+# default, which was most of the remaining size once float32 was fixed.
+encoding = {var: {"zlib": True, "complevel": 4} for var in out.data_vars}
+out.to_netcdf(OUT_PATH, encoding=encoding)
 print("Saved:", OUT_PATH)
