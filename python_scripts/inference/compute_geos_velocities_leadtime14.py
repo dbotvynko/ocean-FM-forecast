@@ -11,10 +11,11 @@ or on PYTHONPATH. The only real dependency is the MDT NetCDF file itself
 (cluster data, not code), at the same absolute path that repo's
 retreive_geos_velocities() already reads from.
 
-Note: unlike that repo's version (which interpolates the SLA field onto
-the MDT's native 0.125deg grid), this interpolates the (coarser) MDT onto
-our own forecast grid instead, to keep the full native resolution of the
-forecast/truth fields.
+Like that repo's version, this interpolates our (coarser, ~0.25deg)
+forecast/truth fields onto the MDT's native ~0.125deg (1/8deg) grid --
+restricted to our own domain's lat/lon extent rather than the whole
+globe, so it doesn't balloon the output for no reason (1/8deg vs 1/4deg
+is already ~4x the pixels for the same area).
 
 Usage:
     python compute_geos_velocities_leadtime14.py
@@ -26,7 +27,7 @@ import xarray as xr
 IN_PATH = "/Odyssey/private/d21botvy/forecast/ocean-DDPMs/outputs/eval_nrt2023_fm_unet/test_leadtime_14.nc"
 OUT_PATH = (
     "/Odyssey/private/d21botvy/forecast/ocean-DDPMs/outputs/eval_nrt2023_fm_unet/"
-    "test_leadtime_14_sample0_geos_vel_H1.nc"
+    "test_leadtime_14_sample0_geos_vel_H1_MDTgrid.nc"
 )
 MDT_PATH = (
     "/Odyssey/public/duacs/cnes_obs-sl_glo_phy-mdt_my_0.125deg_P20Y_multi-vars_"
@@ -65,24 +66,37 @@ def compute_geostrophic_velocity(lat, lon, sla, mdt_u, mdt_v):
 ds = xr.open_dataset(IN_PATH).isel(sample=0, drop=True)
 ds = ds.isel(time=slice(0, ds.sizes["time"] // 2))  # first half of the year only
 
+mdt = xr.open_dataset(MDT_PATH).isel(time=0)
+# MDT longitude is 0-360 native; wrap to -180..180, then sort both coords
+# so .sel()/.interp() below can do straightforward ascending lookups.
+mdt = mdt.assign_coords(longitude=(((mdt.longitude + 180) % 360) - 180))
+mdt = mdt.sortby(["latitude", "longitude"])
+
+# Restrict the MDT's native 1/8deg grid to our own domain extent (not the
+# whole globe) before using it as the interpolation target.
+mdt_domain = mdt.sel(
+    latitude=slice(float(ds.lat.min()), float(ds.lat.max())),
+    longitude=slice(float(ds.lon.min()), float(ds.lon.max())),
+)
+target_lat = mdt_domain.latitude.values.astype(np.float32)
+target_lon = mdt_domain.longitude.values.astype(np.float32)
+
+# Interpolate our (coarser) forecast/truth/rmse fields onto that grid.
+ds = ds.interp(lat=target_lat, lon=target_lon)
+
 # lat/lon are float64 in the source file; without this, mixing them into
 # arithmetic with the float32 sla field silently upcasts every derived
 # array (ugos, vgos, ugosa, vgosa, mdt_u, mdt_v) to float64, roughly
-# doubling their footprint -- 6 extra (337, 680, 1440) float64 arrays is
-# what actually produced the 18G file.
+# doubling their footprint.
 lat = ds["lat"].values.astype(np.float32)
 lon = ds["lon"].values.astype(np.float32)
 sla = ds[VAR_NAME].values.astype(np.float32)  # (time, lat, lon)
 n_time = sla.shape[0]
 
-mdt = xr.open_dataset(MDT_PATH).isel(time=0)
-# MDT longitude is 0-360 native; wrap to -180..180 to match our grid, then
-# sort so .interp() can do a straightforward linear lookup.
-mdt = mdt.assign_coords(longitude=(((mdt.longitude + 180) % 360) - 180)).sortby("longitude")
-mdt_interp = mdt.interp(latitude=lat, longitude=lon)
-
-mdt_u = np.repeat(mdt_interp["u"].values[np.newaxis, :, :], n_time, axis=0).astype(np.float32)
-mdt_v = np.repeat(mdt_interp["v"].values[np.newaxis, :, :], n_time, axis=0).astype(np.float32)
+# mdt_domain is already on exactly (target_lat, target_lon), so no further
+# interpolation is needed for mdt_u/mdt_v.
+mdt_u = np.repeat(mdt_domain["u"].values[np.newaxis, :, :], n_time, axis=0).astype(np.float32)
+mdt_v = np.repeat(mdt_domain["v"].values[np.newaxis, :, :], n_time, axis=0).astype(np.float32)
 
 ugos, vgos, ugosa, vgosa = compute_geostrophic_velocity(lat, lon, sla, mdt_u, mdt_v)
 
