@@ -1,6 +1,7 @@
 """
 Compute geostrophic velocities (ugos, vgos, plus SLA-only anomalies
-ugosa, vgosa) for test_leadtime_14.nc, using only sample=0.
+ugosa, vgosa) for test_leadtime_14.nc, using only sample=0 and only the
+first half of the year (to keep the output size manageable).
 
 The physics (SLA-gradient anomaly + MDT-derived mean velocity) is
 reproduced from CIA-Oceanix/global_ssh_forecasting_ose's
@@ -25,7 +26,7 @@ import xarray as xr
 IN_PATH = "/Odyssey/private/d21botvy/forecast/ocean-DDPMs/outputs/eval_nrt2023_fm_unet/test_leadtime_14.nc"
 OUT_PATH = (
     "/Odyssey/private/d21botvy/forecast/ocean-DDPMs/outputs/eval_nrt2023_fm_unet/"
-    "test_leadtime_14_sample0_geos_vel.nc"
+    "test_leadtime_14_sample0_geos_vel_H1.nc"
 )
 MDT_PATH = (
     "/Odyssey/public/duacs/cnes_obs-sl_glo_phy-mdt_my_0.125deg_P20Y_multi-vars_"
@@ -62,6 +63,7 @@ def compute_geostrophic_velocity(lat, lon, sla, mdt_u, mdt_v):
 
 
 ds = xr.open_dataset(IN_PATH).isel(sample=0, drop=True)
+ds = ds.isel(time=slice(0, ds.sizes["time"] // 2))  # first half of the year only
 
 # lat/lon are float64 in the source file; without this, mixing them into
 # arithmetic with the float32 sla field silently upcasts every derived
