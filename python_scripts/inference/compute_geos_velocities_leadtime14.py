@@ -1,7 +1,7 @@
 """
 Compute geostrophic velocities (ugos, vgos, plus SLA-only anomalies
-ugosa, vgosa) for test_leadtime_14.nc, using only sample=0 and only the
-first 4 months of the year (to keep the output size manageable).
+ugosa, vgosa) for test_leadtime_14.nc, using only sample=0 and only
+February-March (to keep the output size manageable).
 
 The physics (SLA-gradient anomaly + MDT-derived mean velocity) is
 reproduced from CIA-Oceanix/global_ssh_forecasting_ose's
@@ -27,7 +27,7 @@ import xarray as xr
 IN_PATH = "/Odyssey/private/d21botvy/forecast/ocean-DDPMs/outputs/eval_nrt2023_fm_unet/test_leadtime_14.nc"
 OUT_PATH = (
     "/Odyssey/private/d21botvy/forecast/ocean-DDPMs/outputs/eval_nrt2023_fm_unet/"
-    "test_leadtime_14_sample0_geos_vel_Jan-Apr_MDTgrid.nc"
+    "test_leadtime_14_sample0_geos_vel_Feb-Mar_MDTgrid.nc"
 )
 MDT_PATH = (
     "/Odyssey/public/duacs/cnes_obs-sl_glo_phy-mdt_my_0.125deg_P20Y_multi-vars_"
@@ -64,7 +64,7 @@ def compute_geostrophic_velocity(lat, lon, sla, mdt_u, mdt_v):
 
 
 ds = xr.open_dataset(IN_PATH).isel(sample=0, drop=True)
-ds = ds.sel(time=slice("2023-01-01", "2023-04-30"))  # first 4 months only
+ds = ds.sel(time=slice("2023-02-01", "2023-03-31"))  # February-March only
 
 mdt = xr.open_dataset(MDT_PATH).isel(time=0)
 # MDT longitude is 0-360 native; wrap to -180..180, then sort both coords
