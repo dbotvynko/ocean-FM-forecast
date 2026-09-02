@@ -131,6 +131,40 @@ class YearlyLeadtimeEvaluator:
             result[lt] = dict(pred=pred, true=true, rmse=rmse)
         return result
 
+    def day_result_to_dataset(self, start_date, day_result):
+        """
+        Pack one run_day() result into an xr.Dataset with real lat/lon and
+        leadtime/valid_time coordinates:
+          - forecast(sample, leadtime, lat, lon)
+          - truth(leadtime, lat, lon)
+          - rmse(leadtime)
+        """
+        start_date = pd.Timestamp(start_date)
+        obs_days = self.patch_time // 2
+        lat = self.sla_da.lat.values
+        lon = self.sla_da.lon.values
+
+        forecast = np.stack([day_result[lt]["pred"] for lt in self.leadtimes], axis=1)
+        truth = np.stack([day_result[lt]["true"] for lt in self.leadtimes], axis=0)
+        rmse = np.array([day_result[lt]["rmse"] for lt in self.leadtimes])
+        valid_time = [start_date + pd.Timedelta(days=int(obs_days + lt)) for lt in self.leadtimes]
+
+        return xr.Dataset(
+            data_vars=dict(
+                forecast=(("sample", "leadtime", "lat", "lon"), forecast),
+                truth=(("leadtime", "lat", "lon"), truth),
+                rmse=(("leadtime",), rmse),
+            ),
+            coords=dict(
+                sample=np.arange(self.num_samples),
+                leadtime=list(self.leadtimes),
+                valid_time=("leadtime", valid_time),
+                lat=lat,
+                lon=lon,
+                init_time=start_date,
+            ),
+        )
+
     def run_year(self, start_dates, out_dir=None):
         rmses = {lt: [] for lt in self.leadtimes}
 
@@ -144,17 +178,7 @@ class YearlyLeadtimeEvaluator:
                 rmses[lt].append(day_result[lt]["rmse"])
 
             if out_dir is not None:
-                out_path = out_dir / f"{pd.Timestamp(start_date).date()}.npz"
-                np.savez(
-                    out_path,
-                    **{
-                        f"lt{lt}_pred": day_result[lt]["pred"]
-                        for lt in self.leadtimes
-                    },
-                    **{
-                        f"lt{lt}_true": day_result[lt]["true"]
-                        for lt in self.leadtimes
-                    },
-                )
+                out_path = out_dir / f"{pd.Timestamp(start_date).date()}.nc"
+                self.day_result_to_dataset(start_date, day_result).to_netcdf(out_path)
 
         return rmses
