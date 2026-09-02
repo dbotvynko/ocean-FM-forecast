@@ -63,9 +63,14 @@ def compute_geostrophic_velocity(lat, lon, sla, mdt_u, mdt_v):
 
 ds = xr.open_dataset(IN_PATH).isel(sample=0, drop=True)
 
-lat = ds["lat"].values
-lon = ds["lon"].values
-sla = ds[VAR_NAME].values  # (time, lat, lon)
+# lat/lon are float64 in the source file; without this, mixing them into
+# arithmetic with the float32 sla field silently upcasts every derived
+# array (ugos, vgos, ugosa, vgosa, mdt_u, mdt_v) to float64, roughly
+# doubling their footprint -- 6 extra (337, 680, 1440) float64 arrays is
+# what actually produced the 18G file.
+lat = ds["lat"].values.astype(np.float32)
+lon = ds["lon"].values.astype(np.float32)
+sla = ds[VAR_NAME].values.astype(np.float32)  # (time, lat, lon)
 n_time = sla.shape[0]
 
 mdt = xr.open_dataset(MDT_PATH).isel(time=0)
@@ -74,16 +79,16 @@ mdt = xr.open_dataset(MDT_PATH).isel(time=0)
 mdt = mdt.assign_coords(longitude=(((mdt.longitude + 180) % 360) - 180)).sortby("longitude")
 mdt_interp = mdt.interp(latitude=lat, longitude=lon)
 
-mdt_u = np.repeat(mdt_interp["u"].values[np.newaxis, :, :], n_time, axis=0)
-mdt_v = np.repeat(mdt_interp["v"].values[np.newaxis, :, :], n_time, axis=0)
+mdt_u = np.repeat(mdt_interp["u"].values[np.newaxis, :, :], n_time, axis=0).astype(np.float32)
+mdt_v = np.repeat(mdt_interp["v"].values[np.newaxis, :, :], n_time, axis=0).astype(np.float32)
 
 ugos, vgos, ugosa, vgosa = compute_geostrophic_velocity(lat, lon, sla, mdt_u, mdt_v)
 
 out = ds.copy()
-out["ugos"] = (("time", "lat", "lon"), ugos)
-out["vgos"] = (("time", "lat", "lon"), vgos)
-out["ugosa"] = (("time", "lat", "lon"), ugosa)
-out["vgosa"] = (("time", "lat", "lon"), vgosa)
+out["ugos"] = (("time", "lat", "lon"), ugos.astype(np.float32))
+out["vgos"] = (("time", "lat", "lon"), vgos.astype(np.float32))
+out["ugosa"] = (("time", "lat", "lon"), ugosa.astype(np.float32))
+out["vgosa"] = (("time", "lat", "lon"), vgosa.astype(np.float32))
 out["mdt_u"] = (("time", "lat", "lon"), mdt_u)
 out["mdt_v"] = (("time", "lat", "lon"), mdt_v)
 
