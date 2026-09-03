@@ -184,6 +184,74 @@ class YearlyLeadtimeEvaluator:
 
         return rmses
 
+    def day_result_to_mean_std_dataset(self, start_date, day_result):
+        """
+        Like day_result_to_dataset, but collapses the sample dimension:
+        saves the ensemble mean forecast plus its per-pixel std map
+        instead of every raw member, since num_samples>1 raw members
+        would multiply the on-disk size by num_samples for no benefit
+        once you only care about the ensemble summary.
+          - forecast_mean(leadtime, lat, lon)
+          - forecast_std(leadtime, lat, lon)
+          - truth(leadtime, lat, lon)
+          - rmse(leadtime)
+        """
+        start_date = pd.Timestamp(start_date)
+        obs_days = self.patch_time // 2
+        lat = self.sla_da.lat.values
+        lon = self.sla_da.lon.values
+
+        forecast_mean = np.stack(
+            [day_result[lt]["pred"].mean(axis=0) for lt in self.leadtimes], axis=0
+        )
+        forecast_std = np.stack(
+            [day_result[lt]["pred"].std(axis=0) for lt in self.leadtimes], axis=0
+        )
+        truth = np.stack([day_result[lt]["true"] for lt in self.leadtimes], axis=0)
+        rmse = np.array([day_result[lt]["rmse"] for lt in self.leadtimes])
+        valid_time = [start_date + pd.Timedelta(days=int(obs_days + lt)) for lt in self.leadtimes]
+
+        return xr.Dataset(
+            data_vars=dict(
+                forecast_mean=(("leadtime", "lat", "lon"), forecast_mean.astype(np.float32)),
+                forecast_std=(("leadtime", "lat", "lon"), forecast_std.astype(np.float32)),
+                truth=(("leadtime", "lat", "lon"), truth.astype(np.float32)),
+                rmse=(("leadtime",), rmse.astype(np.float32)),
+            ),
+            coords=dict(
+                leadtime=list(self.leadtimes),
+                valid_time=("leadtime", valid_time),
+                lat=lat,
+                lon=lon,
+                init_time=start_date,
+            ),
+            attrs=dict(obs_days=obs_days, num_samples=self.num_samples),
+        )
+
+    def run_year_mean_std(self, start_dates, out_dir):
+        """
+        Like run_year, but writes day_result_to_mean_std_dataset's output
+        (mean + std, no per-sample data) instead of every raw member, with
+        zlib compression on by default since that's the whole point of
+        using this instead of run_year with a larger num_samples.
+        """
+        rmses = {lt: [] for lt in self.leadtimes}
+
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        for start_date in start_dates:
+            day_result = self.run_day(start_date)
+            for lt in self.leadtimes:
+                rmses[lt].append(day_result[lt]["rmse"])
+
+            out_path = out_dir / f"{pd.Timestamp(start_date).date()}.nc"
+            ds = self.day_result_to_mean_std_dataset(start_date, day_result)
+            encoding = {var: {"zlib": True, "complevel": 4} for var in ds.data_vars}
+            ds.to_netcdf(out_path, encoding=encoding)
+
+        return rmses
+
 
 def combine_leadtime_files(out_dir, leadtimes=range(7)):
     """

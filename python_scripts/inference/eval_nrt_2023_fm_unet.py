@@ -2,6 +2,12 @@
 Evaluate the FM-UNet (forecast_DDPM_UNet_1patch) model on the 2023 NRT
 gridded SLA product, per lead time (0-6 days), using a trained checkpoint.
 
+Runs a 5-member ensemble per window (each GenFlowLit.sample() call starts
+from independent random noise) and saves only the ensemble mean and its
+per-pixel std map -- not every raw member, which would multiply the
+on-disk size by 5 for no benefit once you only care about the summary.
+See YearlyLeadtimeEvaluator.run_year_mean_std / day_result_to_mean_std_dataset.
+
 Meant to run alongside an ongoing training job for the same xp: it only
 reads the checkpoint file and never writes into the training run's output
 directory, so it's safe to launch as a separate srun job in parallel.
@@ -38,9 +44,12 @@ CKPT_PATH = (
 )
 NRT_2023_PATH = "/Odyssey/public/altimetry_traces/nrt_sla/2023/gridded_input.nc"
 NRT_2023_VAR = "sla_unfiltered"
-OUT_DIR = "/Odyssey/private/d21botvy/forecast/ocean-DDPMs/outputs/eval_nrt2023_fm_unet/"
+# Separate dir from the completed single-sample run (eval_nrt2023_fm_unet/):
+# run_year_mean_std writes a different schema (forecast_mean/forecast_std
+# instead of forecast+sample dim), so reusing that dir would overwrite it.
+OUT_DIR = "/Odyssey/private/d21botvy/forecast/ocean-DDPMs/outputs/eval_nrt2023_fm_unet_ensemble5/"
 LEADTIMES = range(7)
-NUM_SAMPLES = 1
+NUM_SAMPLES = 5
 
 with initialize_config_dir(version_base="1.3", config_dir=str(REPO_ROOT / "config")):
     cfg = compose(config_name="main", overrides=["xp=forecast_DDPM_UNet_1patch"])
@@ -72,7 +81,7 @@ evaluator = YearlyLeadtimeEvaluator(
     num_samples=NUM_SAMPLES,
 )
 
-rmses = evaluator.run_year(start_dates, out_dir=OUT_DIR)
+rmses = evaluator.run_year_mean_std(start_dates, out_dir=OUT_DIR)
 
 print()
 print("Per-window forecasts/truth saved to:", OUT_DIR)
