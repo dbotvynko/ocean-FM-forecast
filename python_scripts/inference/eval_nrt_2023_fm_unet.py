@@ -70,7 +70,7 @@ sla_da = load_gridded_sla(
     lon_slice=domain_train["lon"],
 )
 
-start_dates = pd.date_range("2023-01-01", periods=365 - patch_time + 1, freq="D")
+start_dates = pd.date_range("2023-01-01", "2023-03-31", freq="D")  # Jan-Mar window starts only
 
 evaluator = YearlyLeadtimeEvaluator(
     model,
