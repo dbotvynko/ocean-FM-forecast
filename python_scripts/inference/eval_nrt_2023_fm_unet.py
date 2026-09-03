@@ -40,7 +40,7 @@ from contrib.generative.inference import (  # noqa: E402
 
 CKPT_PATH = (
     "/Odyssey/private/d21botvy/forecast/ocean-DDPMs/outputs/2026-09-01/13-42-20/"
-    "forecast_DDPM_UNet_1patch/checkpoints/val_loss=0.01317-epoch=084.ckpt"
+    "forecast_DDPM_UNet_1patch/checkpoints/val_loss=0.01161-epoch=153.ckpt"
 )
 NRT_2023_PATH = "/Odyssey/public/altimetry_traces/nrt_sla/2023/gridded_input.nc"
 NRT_2023_VAR = "sla_unfiltered"
