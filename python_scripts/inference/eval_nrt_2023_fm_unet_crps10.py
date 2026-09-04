@@ -84,10 +84,13 @@ evaluator = YearlyLeadtimeEvaluator(
     num_samples=NUM_SAMPLES,
 )
 
-rmses = evaluator.run_year_mean_std_crps(start_dates, out_dir=OUT_DIR)
+rmses, crps_fair_means = evaluator.run_year_mean_std_crps(start_dates, out_dir=OUT_DIR)
 
 print()
 print("Per-window forecast_mean/forecast_std/crps/crps_fair/truth saved to:", OUT_DIR)
 print()
-for lt, values in rmses.items():
-    print(f"leadtime {lt}: mean RMSE over {len(values)} windows = {np.nanmean(values):.5f}")
+for lt in LEADTIMES:
+    rmse_mean = np.nanmean(rmses[lt])
+    crps_mean = np.nanmean(crps_fair_means[lt])
+    n = len(rmses[lt])
+    print(f"leadtime {lt}: mean RMSE over {n} windows = {rmse_mean:.5f}  |  mean fair CRPS = {crps_mean:.5f}")

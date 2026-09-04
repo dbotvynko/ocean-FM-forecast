@@ -386,23 +386,33 @@ class YearlyLeadtimeEvaluator:
         per leadtime/pixel (day_result_to_mean_std_crps_dataset) -- needs
         num_samples > 1 to be meaningful (CRPS of a 1-member "ensemble"
         degenerates to plain absolute error).
+
+        Returns (rmses, crps_fair_means): both {leadtime: [per-window
+        values]} dicts, rmses as before and crps_fair_means as each
+        window's spatial-mean (nanmean) crps_fair -- a quick summary on
+        top of the full per-pixel maps already written to out_dir, so
+        callers don't have to reopen the files just to see a headline
+        number per leadtime.
         """
         rmses = {lt: [] for lt in self.leadtimes}
+        crps_fair_means = {lt: [] for lt in self.leadtimes}
 
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
 
         for start_date in start_dates:
             day_result = self.run_day(start_date)
-            for lt in self.leadtimes:
-                rmses[lt].append(day_result[lt]["rmse"])
 
             out_path = out_dir / f"{pd.Timestamp(start_date).date()}.nc"
             ds = self.day_result_to_mean_std_crps_dataset(start_date, day_result)
             encoding = {var: {"zlib": True, "complevel": 4} for var in ds.data_vars}
             ds.to_netcdf(out_path, encoding=encoding)
 
-        return rmses
+            for lt in self.leadtimes:
+                rmses[lt].append(day_result[lt]["rmse"])
+                crps_fair_means[lt].append(float(ds["crps_fair"].sel(leadtime=lt).mean(skipna=True)))
+
+        return rmses, crps_fair_means
 
 
 def combine_leadtime_files(out_dir, leadtimes=range(7)):
