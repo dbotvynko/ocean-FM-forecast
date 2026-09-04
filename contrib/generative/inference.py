@@ -77,6 +77,58 @@ def forecast_window(model, item, denorm_stats):
     return final * s + m
 
 
+def crps_ensemble(ensemble, truth):
+    """
+    Empirical CRPS (energy/NRG estimator) for a finite ensemble forecast
+    against an observation:
+
+        CRPS = (1/N) sum_i |x_i - y|  -  (1/(2N^2)) sum_i sum_j |x_i - x_j|
+
+    ensemble: (N, ...) array of ensemble members.
+    truth: array broadcastable against ensemble's trailing dims.
+    Returns an array shaped like truth (NaN wherever truth is NaN).
+
+    This needs the raw ensemble members, so it can only be computed while
+    they're still in memory (e.g. inside YearlyLeadtimeEvaluator.run_day),
+    not from an already-saved forecast_mean/forecast_std file -- see
+    gaussian_crps for that case.
+
+    Known bias: this estimator systematically overestimates CRPS for
+    small N (verified: N=5 gave ~0.35 vs the true ~0.23 for a standard
+    normal in a quick check here), converging to the true value as N
+    grows. Fine for comparing conditions that share the same N (e.g.
+    leadtime-to-leadtime, or model-to-model at the same ensemble size),
+    but don't compare its absolute value across different N without
+    correcting for this (the "fair CRPS" variant divides the second term
+    by N*(N-1) instead of N^2, which removes the bias at the cost of
+    higher variance for small N).
+    """
+    n = ensemble.shape[0]
+    term1 = np.abs(ensemble - truth[None, ...]).mean(axis=0)
+    diffs = np.abs(ensemble[:, None, ...] - ensemble[None, :, ...])
+    term2 = diffs.sum(axis=(0, 1)) / (2 * n * n)
+    return term1 - term2
+
+
+def gaussian_crps(mean, std, truth):
+    """
+    Closed-form CRPS under a Gaussian approximation N(mean, std) of the
+    forecast distribution (Gneiting & Raftery 2007), usable when only
+    summary statistics are available (e.g. this repo's saved
+    forecast_mean/forecast_std, not the raw ensemble members):
+
+        z = (truth - mean) / std
+        CRPS = std * [ z*(2*Phi(z) - 1) + 2*phi(z) - 1/sqrt(pi) ]
+
+    An approximation, not the exact empirical CRPS -- see crps_ensemble
+    for that (requires the raw ensemble, computed on the fly).
+    """
+    from scipy.stats import norm
+
+    z = (truth - mean) / std
+    return std * (z * (2 * norm.cdf(z) - 1) + 2 * norm.pdf(z) - 1 / np.sqrt(np.pi))
+
+
 class YearlyLeadtimeEvaluator:
     """
     Slides a patch_time-day window one day at a time over a gridded SLA
@@ -247,6 +299,81 @@ class YearlyLeadtimeEvaluator:
 
             out_path = out_dir / f"{pd.Timestamp(start_date).date()}.nc"
             ds = self.day_result_to_mean_std_dataset(start_date, day_result)
+            encoding = {var: {"zlib": True, "complevel": 4} for var in ds.data_vars}
+            ds.to_netcdf(out_path, encoding=encoding)
+
+        return rmses
+
+    def day_result_to_mean_std_crps_dataset(self, start_date, day_result):
+        """
+        Like day_result_to_mean_std_dataset, but also computes the exact
+        empirical CRPS (crps_ensemble) per leadtime/pixel from the raw
+        ensemble in day_result before it's discarded. CRPS needs the full
+        ensemble, not just mean/std, so it can only be computed here --
+        not retroactively from an already-saved mean/std-only file (use
+        gaussian_crps against forecast_mean/forecast_std for that case).
+          - forecast_mean(leadtime, lat, lon)
+          - forecast_std(leadtime, lat, lon)
+          - crps(leadtime, lat, lon)
+          - truth(leadtime, lat, lon)
+          - rmse(leadtime)
+        """
+        start_date = pd.Timestamp(start_date)
+        obs_days = self.patch_time // 2
+        lat = self.sla_da.lat.values
+        lon = self.sla_da.lon.values
+
+        forecast_mean = np.stack(
+            [day_result[lt]["pred"].mean(axis=0) for lt in self.leadtimes], axis=0
+        )
+        forecast_std = np.stack(
+            [day_result[lt]["pred"].std(axis=0) for lt in self.leadtimes], axis=0
+        )
+        crps = np.stack(
+            [crps_ensemble(day_result[lt]["pred"], day_result[lt]["true"]) for lt in self.leadtimes],
+            axis=0,
+        )
+        truth = np.stack([day_result[lt]["true"] for lt in self.leadtimes], axis=0)
+        rmse = np.array([day_result[lt]["rmse"] for lt in self.leadtimes])
+        valid_time = [start_date + pd.Timedelta(days=int(obs_days + lt)) for lt in self.leadtimes]
+
+        return xr.Dataset(
+            data_vars=dict(
+                forecast_mean=(("leadtime", "lat", "lon"), forecast_mean.astype(np.float32)),
+                forecast_std=(("leadtime", "lat", "lon"), forecast_std.astype(np.float32)),
+                crps=(("leadtime", "lat", "lon"), crps.astype(np.float32)),
+                truth=(("leadtime", "lat", "lon"), truth.astype(np.float32)),
+                rmse=(("leadtime",), rmse.astype(np.float32)),
+            ),
+            coords=dict(
+                leadtime=list(self.leadtimes),
+                valid_time=("leadtime", valid_time),
+                lat=lat,
+                lon=lon,
+                init_time=start_date,
+            ),
+            attrs=dict(obs_days=obs_days, num_samples=self.num_samples),
+        )
+
+    def run_year_mean_std_crps(self, start_dates, out_dir):
+        """
+        Like run_year_mean_std, but also writes the exact ensemble CRPS
+        per leadtime/pixel (day_result_to_mean_std_crps_dataset) -- needs
+        num_samples > 1 to be meaningful (CRPS of a 1-member "ensemble"
+        degenerates to plain absolute error).
+        """
+        rmses = {lt: [] for lt in self.leadtimes}
+
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        for start_date in start_dates:
+            day_result = self.run_day(start_date)
+            for lt in self.leadtimes:
+                rmses[lt].append(day_result[lt]["rmse"])
+
+            out_path = out_dir / f"{pd.Timestamp(start_date).date()}.nc"
+            ds = self.day_result_to_mean_std_crps_dataset(start_date, day_result)
             encoding = {var: {"zlib": True, "complevel": 4} for var in ds.data_vars}
             ds.to_netcdf(out_path, encoding=encoding)
 
