@@ -43,7 +43,7 @@ trainer:
     save_dir: ${hydra:runtime.output_dir}
     name: ${hydra:runtime.choices.xp}
     version: ''
-  max_epochs: 300
+  max_epochs: 850
   #limit_train_batches: 100
   callbacks:
     - _target_: pytorch_lightning.callbacks.LearningRateMonitor
