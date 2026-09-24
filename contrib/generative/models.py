@@ -198,6 +198,10 @@ class GenFlowLitWithCoords(GenFlowLit):
     (flow-matching schedule, loss, sampling loop) is identical to GenFlowLit.
     """
 
+    # False keeps the original behaviour: under DDP each rank logs the loss of
+    # its own shard and the checkpoint callback sees rank 0's value only.
+    sync_dist_logging = False
+
     @staticmethod
     def _augmented_y(input_t, coords_t):
         return torch.cat([input_t, coords_t.to(input_t.device)], dim=1)
@@ -213,7 +217,8 @@ class GenFlowLitWithCoords(GenFlowLit):
         out = self(batch=batch)
         loss = self.weighted_mse(out - self.bs, self.rec_weight)
         with torch.no_grad():
-            self.log(f"{phase}_loss", loss, prog_bar=True, on_step=False, on_epoch=True)
+            self.log(f"{phase}_loss", loss, prog_bar=True, on_step=False, on_epoch=True,
+                     sync_dist=self.sync_dist_logging)
 
         return loss, out
 
@@ -272,6 +277,17 @@ class GenFlowLitWithCoords(GenFlowLit):
 
         returns.append(self.xts.clone())
         return returns
+
+
+class GenFlowLitWithCoordsSynced(GenFlowLitWithCoords):
+    """
+    GenFlowLitWithCoords with the epoch-level train/val losses averaged over
+    all DDP ranks (sync_dist=True), so val_loss -- and the checkpoint
+    selection monitoring it -- covers the whole validation set rather than
+    rank 0's shard.
+    """
+
+    sync_dist_logging = True
 
 
 def cosanneal_lr_adam(lit_mod, lr, T_max=100, weight_decay=0.):
