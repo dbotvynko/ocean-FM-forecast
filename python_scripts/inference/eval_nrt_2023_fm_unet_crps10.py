@@ -14,17 +14,18 @@ every raw member (10 raw samples/day would multiply the on-disk size by
 10 for no benefit once you only care about the ensemble summary).
 
 Compute cost: ~2x the 5-member ensemble run (10 samples/window instead
-of 5), same 90 Jan-Mar window starts -- budget for several hours.
+of 5), same 90-day window starts -- budget for several hours.
 
 Meant to run alongside an ongoing training job for the same xp: it only
 reads the checkpoint file and never writes into the training run's output
 directory, so it's safe to launch as a separate srun job in parallel.
 
 Usage:
-    python eval_nrt_2023_fm_unet_crps10.py
+    python eval_nrt_2023_fm_unet_crps10.py [--season winter|summer]
 (edit CKPT_PATH below to point at whichever checkpoint you want to evaluate)
 """
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -42,6 +43,15 @@ from contrib.generative.inference import (  # noqa: E402
     load_gridded_sla,
 )
 
+SEASON_RANGES = {
+    "winter": ("2023-01-01", "2023-03-31"),  # original 90-day Jan-Mar window
+    "summer": ("2023-07-01", "2023-09-28"),  # 90-day Jul-Sep window
+}
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--season", choices=sorted(SEASON_RANGES), default="winter")
+args = parser.parse_args()
+
 CKPT_PATH = (
     "/Odyssey/private/d21botvy/forecast/ocean-DDPMs/outputs/2026-09-01/13-42-20/"
     "forecast_DDPM_UNet_1patch/checkpoints/val_loss=0.01161-epoch=153.ckpt"
@@ -49,8 +59,10 @@ CKPT_PATH = (
 NRT_2023_PATH = "/Odyssey/public/altimetry_traces/nrt_sla/2023/gridded_input.nc"
 NRT_2023_VAR = "sla_unfiltered"
 # Separate dir from the mean/std-only ensemble5 run: this one's daily
-# files carry crps/crps_fair too, and a different num_samples.
-OUT_DIR = "/Odyssey/private/d21botvy/forecast/ocean-DDPMs/outputs/eval_nrt2023_fm_unet_crps10/"
+# files carry crps/crps_fair too, and a different num_samples. A season
+# suffix keeps a summer run from overwriting the original winter output.
+_out_suffix = "" if args.season == "winter" else f"_{args.season}"
+OUT_DIR = f"/Odyssey/private/d21botvy/forecast/ocean-DDPMs/outputs/eval_nrt2023_fm_unet_crps10{_out_suffix}/"
 LEADTIMES = range(7)
 NUM_SAMPLES = 10
 
@@ -73,7 +85,8 @@ sla_da = load_gridded_sla(
     lon_slice=domain_train["lon"],
 )
 
-start_dates = pd.date_range("2023-01-01", "2023-03-31", freq="D")  # Jan-Mar window starts only
+season_start, season_end = SEASON_RANGES[args.season]
+start_dates = pd.date_range(season_start, season_end, freq="D")  # this season's window starts only
 
 evaluator = YearlyLeadtimeEvaluator(
     model,
