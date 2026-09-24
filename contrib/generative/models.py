@@ -290,6 +290,24 @@ class GenFlowLitWithCoordsSynced(GenFlowLitWithCoords):
     sync_dist_logging = True
 
 
+class GenFlowLitWithLearnedCoords(GenFlowLitWithCoordsSynced):
+    """
+    GenFlowLitWithCoordsSynced where the raw coordinate stack carried by the
+    dataset (coord_embeddings.build_raw_coord_channels) goes through a
+    trainable encoder (e.g. learned_fourier.LearnedFourierCoordEncoder) before
+    being concatenated onto the masked-observation branch. The encoder is a
+    submodule, so it is optimised with the UNet and saved in the checkpoints.
+    """
+
+    def __init__(self, *args, coord_encoder, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.coord_encoder = coord_encoder
+
+    def _augmented_y(self, input_t, coords_t):
+        emb = self.coord_encoder(coords_t.to(device=input_t.device, dtype=input_t.dtype))
+        return torch.cat([input_t, emb], dim=1)
+
+
 def cosanneal_lr_adam(lit_mod, lr, T_max=100, weight_decay=0.):
     opt = torch.optim.Adam(
         [

@@ -107,3 +107,31 @@ def num_fourier_coord_channels(lat_harmonics=LAT_HARMONICS,
                                doy_harmonics=DOY_HARMONICS):
     """Channel count returned by build_fourier_coord_channels."""
     return 2 * (len(lat_harmonics) + len(lon_harmonics) + len(doy_harmonics))
+
+
+# Raw coordinates for a learned encoder
+# -------------------------------------
+def build_raw_coord_channels(lat, lon, times):
+    """
+    Minimal coordinate stack fed to a learned encoder
+    (contrib.generative.learned_fourier.LearnedFourierCoordEncoder), which
+    learns its own frequencies on top of it. Lon and day-of-year are given
+    on the unit circle so that anything computed from them stays periodic;
+    lat is not cyclic and is just rescaled to [-1, 1].
+
+    Returns a float32 array of shape (5, nlat, nlon):
+        lat/90, sin(lon), cos(lon), sin(doy), cos(doy)   (doy: patch middle day)
+    """
+    nlat, nlon = lat.shape[0], lon.shape[0]
+    lat_n = (np.asarray(lat, dtype=np.float64) / 90.0)[:, None]
+    lon_rad = np.deg2rad(lon)[None, :]
+    doy = pd.DatetimeIndex(np.asarray(times)).dayofyear.to_numpy()
+    doy_frac = 2 * np.pi * doy[len(doy) // 2] / 365.25
+
+    channels = [lat_n, np.sin(lon_rad), np.cos(lon_rad),
+                np.full((1, 1), np.sin(doy_frac)), np.full((1, 1), np.cos(doy_frac))]
+    coords = np.stack([np.broadcast_to(c, (nlat, nlon)) for c in channels], axis=0)
+    return coords.astype(np.float32)
+
+
+NUM_RAW_COORD_CHANNELS = 5

@@ -1,0 +1,29 @@
+# @package _global_
+#
+# forecast_DDPM_UNet_1patch_coords with a *learned* Fourier encoder of the
+# coordinates (contrib.generative.learned_fourier.LearnedFourierCoordEncoder,
+# Li et al. 2021) instead of a fixed sin/cos encoding:
+#   raw coords (5 ch: lat/90, sin/cos lon, sin/cos DoY of the patch middle day)
+#   -> 32 learnable frequencies -> cos/sin -> 1x1-conv MLP (64, GELU) -> 16 ch
+# trained jointly with the UNet. input_channels = 58 (xt + masked obs) + 16 = 74
+# Losses are averaged over both GPUs (sync_dist), as in the Fourier xp.
+# Data, trainer (clipping, accumulation) and lr are inherited unchanged.
+
+defaults:
+  - forecast_DDPM_UNet_1patch_coords
+  - _self_
+
+datamodule:
+  _target_: contrib.glorys12.DistinctNormDataModuleWithRawCoords
+
+model:
+  _target_: contrib.generative.models.GenFlowLitWithLearnedCoords
+  coord_encoder:
+    _target_: contrib.generative.learned_fourier.LearnedFourierCoordEncoder
+    in_channels: 5
+    num_frequencies: 32
+    hidden_channels: 64
+    out_channels: 16
+    sigma: 8.0
+  solver:
+    input_channels: 74

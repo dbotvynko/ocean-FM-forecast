@@ -20,7 +20,7 @@ from omegaconf import OmegaConf
 from pathlib import Path
 import hydra
 
-from contrib.generative.coord_embeddings import build_coord_channels, build_fourier_coord_channels
+from contrib.generative.coord_embeddings import build_coord_channels, build_fourier_coord_channels, build_raw_coord_channels
 
 # Exceptions
 # ----------
@@ -265,6 +265,22 @@ class DistinctNormDataModuleWithFourierCoords(DistinctNormDataModuleWithCoords):
     """DistinctNormDataModuleWithCoords yielding Fourier-encoded coordinates."""
 
     dataset_cls = LazyXrDatasetWithFourierCoords
+
+
+class LazyXrDatasetWithRawCoords(LazyXrDatasetWithCoords):
+    """
+    LazyXrDatasetWithCoords yielding the raw coordinate stack
+    (contrib.generative.coord_embeddings.build_raw_coord_channels), to be
+    encoded by a trainable module inside the model.
+    """
+
+    coord_builder = staticmethod(build_raw_coord_channels)
+
+
+class DistinctNormDataModuleWithRawCoords(DistinctNormDataModuleWithCoords):
+    """DistinctNormDataModuleWithCoords yielding raw coordinates for a learned encoder."""
+
+    dataset_cls = LazyXrDatasetWithRawCoords
 
 
 def load_glorys12_data(tgt_path, inp_path, tgt_var="zos", inp_var="input"):
