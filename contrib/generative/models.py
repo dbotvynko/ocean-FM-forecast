@@ -189,6 +189,91 @@ class GenFlowLit(pl.LightningModule):
         return returns
 
 
+class GenFlowLitWithCoords(GenFlowLit):
+    """
+    GenFlowLit variant that conditions the solver on a per-pixel lat/lon/DoY
+    coordinate stack (contrib.generative.coord_embeddings.build_coord_channels,
+    carried by the dataset as batch.coords) concatenated onto the masked
+    observation branch `y`, alongside the noisy target `xt`. Everything else
+    (flow-matching schedule, loss, sampling loop) is identical to GenFlowLit.
+    """
+
+    @staticmethod
+    def _augmented_y(input_t, coords_t):
+        return torch.cat([input_t, coords_t.to(input_t.device)], dim=1)
+
+    def forward(self, batch):
+        y = self._augmented_y(batch.input, batch.coords)
+        return self.solver(xt=self.xts.nan_to_num(), y=y.nan_to_num(), t=self.ts)
+
+    def step(self, batch, phase=""):
+        if self.training and batch.tgt.isfinite().float().mean() < 0.1:
+            return None, None
+
+        out = self(batch=batch)
+        loss = self.weighted_mse(out - self.bs, self.rec_weight)
+        with torch.no_grad():
+            self.log(f"{phase}_loss", loss, prog_bar=True, on_step=False, on_epoch=True)
+
+        return loss, out
+
+    def sample(self, batch):
+        batch_size = batch.input.size()[0]
+
+        batch = self.mask_batch(batch)
+        batch_input = batch.input.cuda()
+        coords = batch.coords.cuda()
+
+        self.xts = torch.rand_like(batch.input)
+
+        returns = []
+
+        for t in tqdm(range(self.max_steps), position=1):
+            self.ts = torch.ones((batch_size,)).type(torch.int).to(batch_input.device) * t
+            y = self._augmented_y(batch_input, coords)
+            out = self.solver(xt=self.xts.nan_to_num().to(batch_input.device), y=y.nan_to_num(), t=self.ts.to(batch_input.device))
+
+            self.xts += (out.detach().cpu() / self.max_steps)
+            del out
+            del self.ts
+            torch.cuda.empty_cache()
+            if t % 20 == 0:
+                returns.append(self.xts.clone())
+
+        returns.append(self.xts.clone())
+        return returns
+
+    def sample_sde(self, batch, epsilon):
+        batch_size = batch.input.size()[0]
+
+        batch = self.mask_batch(batch)
+        batch_input = batch.input.cuda()
+        coords = batch.coords.cuda()
+
+        self.xts = torch.rand_like(batch.input)
+
+        returns = []
+
+        for t in tqdm(range(self.max_steps)):
+            self.ts = torch.ones((batch_size,)).type(torch.int).to(batch_input.device) * t
+            y = self._augmented_y(batch_input, coords)
+            out = self.solver(xt=self.xts.nan_to_num().to(batch_input.device), y=y.nan_to_num(), t=self.ts.to(batch_input.device))
+
+            Wt = torch.rand_like(batch.input) / self.max_steps
+            eps_t = epsilon(t)
+
+            t_1 = t / self.max_steps
+
+            self.xts += self.xts * t_1 / self.max_steps + (out.detach().cpu() - t_1 * self.xts) * (t_1**2 - t_1 - 1 + eps_t) / (t_1**2 - t_1 - 1) / self.max_steps + np.sqrt(2 * eps_t) * Wt
+            del out
+            del self.ts
+            if t % 20 == 0:
+                returns.append(self.xts.clone())
+
+        returns.append(self.xts.clone())
+        return returns
+
+
 def cosanneal_lr_adam(lit_mod, lr, T_max=100, weight_decay=0.):
     opt = torch.optim.Adam(
         [

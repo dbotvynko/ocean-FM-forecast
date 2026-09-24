@@ -1,0 +1,134 @@
+# @package _global_
+#
+# Same setup as forecast_DDPM_UNet_1patch.yaml, but each input pixel is also
+# given a lat/lon/day-of-year coordinate embedding (see
+# contrib.generative.coord_embeddings.build_coord_channels), concatenated
+# onto the masked-observation branch before the UNet's initial conv:
+#   - lat:  1 channel  (sin(lat))
+#   - lon:  2 channels (sin(lon), cos(lon))
+#   - DoY:  2 channels per timestep (sin(doy), cos(doy)), 29 timesteps -> 58
+# input_channels = 58 (xt + masked obs, as in the base xp) + 61 (coords) = 119
+
+domain:
+  train:
+    lat:
+      _target_: builtins.slice
+      _args_:
+      - -80
+      - 90
+    lon:
+      _target_: builtins.slice
+      _args_:
+      - -180
+      - 180
+  test:
+    lat:
+      _target_: builtins.slice
+      _args_:
+      - -79
+      - 89
+    lon:
+      _target_: builtins.slice
+      _args_:
+      - -179
+      - 179
+
+trainer:
+  _target_: pytorch_lightning.Trainer
+  inference_mode: False
+  # Tightened from 0.5 -> 0.2 2026-09-22 after accumulate_grad_batches=8
+  # alone wasn't enough to prevent a second divergence (epoch 32: val_loss
+  # 0.022 -> 0.31 -> 0.33 -> 0.73, train_loss up to 1.29 -- a runaway, not
+  # a transient blip like the first one at epoch 5).
+  gradient_clip_val: 0.2
+  accelerator: gpu
+  devices: 2
+  precision: bf16-mixed
+  # batch_size=1 (dl_kw below) means a single pathological day can dominate
+  # an optimizer step; accumulate over more steps before updating to average
+  # that out. Raised from 8 -> 16 2026-09-22 (see gradient_clip_val note)
+  # after the first setting (8) only delayed, not prevented, a divergence.
+  accumulate_grad_batches: 16
+  logger:
+    _target_: pytorch_lightning.loggers.CSVLogger
+    save_dir: ${hydra:runtime.output_dir}
+    name: ${hydra:runtime.choices.xp}
+    version: ''
+  max_epochs: 300
+  callbacks:
+    - _target_: pytorch_lightning.callbacks.LearningRateMonitor
+    - _target_: pytorch_lightning.callbacks.ModelCheckpoint
+      monitor: val_loss
+      save_top_k: 3
+      filename: '{val_loss:.5f}-{epoch:03d}'
+
+datamodule:
+  _target_: contrib.glorys12.DistinctNormDataModuleWithCoords
+  input_da:
+    _target_: contrib.glorys12.load_glorys12_data_on_fly_inp_pickle_mask
+    tgt_path: /Odyssey/public/glorys/reanalysis/glorys12_2010_2019_daily_sla_4th_float32.nc
+    tgt_var: sla
+    inp_path: /Odyssey/public/glorys/obs_masks/global_obs_6sats_masks_2022.pickle
+  domains:
+    train:
+      time: {_target_: builtins.slice, _args_: ['2010-01-01', '2019-05-17']}
+    val:
+      time: {_target_: builtins.slice, _args_: ['2019-05-18', '2019-12-31']}
+    test:
+      time: {_target_: builtins.slice,  _args_: ['2019-12-31', '2019-12-31']}
+  xrds_kw:
+    train:
+      patch_dims: { time: 29, lat: 680, lon: 1440}
+      strides: { time: 1, lat: 672, lon: 1432}
+      domain_limits: ${domain.train}
+    val:
+      patch_dims: { time: 29, lat: 680, lon: 1440}
+      strides: { time: 1, lat: 672, lon: 1432}
+      domain_limits: ${domain.train}
+  dl_kw: {batch_size: 1, num_workers: 8}
+  norm_stats:  # norm values from tgt
+    train:
+    - -0.001930378327255099
+    - 0.08604745118775728
+    val:
+    - 0.01560162689028551
+    - 0.08583080433051968
+
+model:
+  _target_: contrib.generative.models.GenFlowLitWithCoords
+  solver:
+    _target_: contrib.generative.unet.UNet
+    _partial_: True
+    input_channels: 119
+    output_channels: 29
+  max_steps: 100
+  opt_fn:
+    _target_: contrib.generative.models.cosanneal_lr_adam
+    _partial_: true
+    lr: 1e-4
+    T_max: ${trainer.max_epochs}
+  rec_weight:
+    _target_: contrib.forecast.utils.get_forecast_wei
+    patch_dims: ${datamodule.xrds_kw.train.patch_dims}
+    crop: {time: 0, lat: 4, lon: 4}
+  rec_weight_fn:
+    _target_: contrib.forecast_weights.forecast_weights_reconstruction_soft_edges
+    _partial_: True
+    soft_edge: 0.25
+  pre_metric_fn:
+        _target_: xarray.Dataset.sel
+        _partial_: True
+        time: {_target_: builtins.slice, _args_: ["2012-11-25", "2012-12-31"]}
+        lat: ${domain.test.lat}
+        lon: ${domain.test.lon}
+
+entrypoints:
+  - _target_: pytorch_lightning.seed_everything
+    seed: 333
+  - _target_: ocean4dvarnet.train.base_training
+    trainer: ${trainer}
+    lit_mod: ${model}
+    dm: ${datamodule}
+
+defaults:
+  - _self_

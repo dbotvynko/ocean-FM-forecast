@@ -20,12 +20,15 @@ from omegaconf import OmegaConf
 from pathlib import Path
 import hydra
 
+from contrib.generative.coord_embeddings import build_coord_channels
+
 # Exceptions
 # ----------
 
 TrainingItemwithLonLat = namedtuple('TrainingItemwithLonLat', ['input', 'tgt','lon','lat'])
 TrainingItemOSEwOSSE = namedtuple('TrainingItemOSEwOSSE', ['input', 'tgt','input_osse','tgt_osse','lon','lat'])
 TrainingItemOSEwOSSEwMask = namedtuple('TrainingItemOSEwOSSEwMask', ['input', 'tgt','input_osse','tgt_osse','lon','lat','mask_input_lr'])
+TrainingItemWithCoords = namedtuple('TrainingItemWithCoords', ['input', 'tgt', 'coords'])
 
 class NormParamsNotProvided(Exception):
     """Normalisation parameters have not been provided"""
@@ -89,6 +92,31 @@ class DistinctNormDataModule(BaseDataModule):
     #        num_workers=1,
     #    )
 
+
+class DistinctNormDataModuleWithCoords(DistinctNormDataModule):
+    """
+    DistinctNormDataModule variant that yields LazyXrDatasetWithCoords items
+    (input, tgt, coords), for the FM UNet lat/lon/DoY conditioning xp. Only
+    `input`/`tgt` are normalized (via the inherited post_fn) -- `coords` is
+    already bounded via sin/cos, so it needs no normalization.
+    """
+
+    def setup(self, stage="test"):
+        self.train_ds = LazyXrDatasetWithCoords(
+            self.input_da.sel(self.domains["train"]),
+            **self.xrds_kw["train"],
+            postpro_fn=self.post_fn("train"),
+            mask=self.input_mask,
+        )
+
+        self.val_ds = LazyXrDatasetWithCoords(
+            self.input_da.sel(self.domains["val"]),
+            **self.xrds_kw["val"],
+            postpro_fn=self.post_fn("val"),
+            mask=self.input_mask,
+        )
+
+
 class LazyXrDataset(torch.utils.data.Dataset):
     def __init__(
         self,
@@ -142,7 +170,7 @@ class LazyXrDataset(torch.utils.data.Dataset):
             self.return_coords = False
             return coords
 
-    def __getitem__(self, item):
+    def _index_to_slice(self, item):
         sl = {}
         _zip = zip(
             self.ds_size.keys(), np.unravel_index(item, tuple(self.ds_size.values()))
@@ -153,6 +181,10 @@ class LazyXrDataset(torch.utils.data.Dataset):
                 self.strides.get(dim, 1) * idx,
                 self.strides.get(dim, 1) * idx + self.patch_dims[dim],
             )
+        return sl
+
+    def __getitem__(self, item):
+        sl = self._index_to_slice(item)
 
         if self.mask is not None:
             start, stop = sl["time"].start % 365, sl["time"].stop % 365
@@ -187,6 +219,30 @@ class LazyXrDataset(torch.utils.data.Dataset):
         if self.postpro_fn is not None:
             return self.postpro_fn(item)
         return item
+
+
+class LazyXrDatasetWithCoords(LazyXrDataset):
+    """
+    Like LazyXrDataset, but each item also carries a per-pixel coordinate
+    embedding stack (lat, lon, day-of-year -- cyclic sin/cos, see
+    contrib.generative.coord_embeddings.build_coord_channels) built from the
+    real lat/lon/time slice of that patch, for the FM UNet lat/lon/DoY
+    conditioning xp.
+    """
+
+    def __getitem__(self, item):
+        base = super().__getitem__(item)
+        if self.return_coords:
+            return base
+
+        sl = self._index_to_slice(item)
+        lat_vals = self.ds.lat.isel(lat=sl["lat"]).values
+        lon_vals = self.ds.lon.isel(lon=sl["lon"]).values
+        time_vals = self.ds.time.isel(time=sl["time"]).values
+        coords = build_coord_channels(lat_vals, lon_vals, time_vals)
+
+        return TrainingItemWithCoords(input=base.input, tgt=base.tgt, coords=coords)
+
 
 def load_glorys12_data(tgt_path, inp_path, tgt_var="zos", inp_var="input"):
     isel = None  # dict(time=slice(-465, -265))
