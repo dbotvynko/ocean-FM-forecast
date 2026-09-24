@@ -1,0 +1,31 @@
+# @package _global_
+#
+# Continue the sin/cos coords xp (job 54700) after its divergence at epoch
+# ~117 (val_loss 0.017 -> 0.057, never recovered): start from the weights of
+# its best checkpoint (epoch 90, val_loss 0.01633) with a fresh Adam state and
+# a lower learning rate (3e-5 cosine-annealed to 0 over 150 epochs, instead of
+# ~7e-5 where the original run was when it diverged). Weights only -- see
+# contrib.generative.train_utils.warm_start_training -- since a full resume
+# would restore the optimizer state and LR the divergence happened with.
+
+defaults:
+  - forecast_DDPM_UNet_1patch_coords
+  - _self_
+
+init_ckpt: /Odyssey/private/d21botvy/forecast/ocean-DDPMs/outputs/2026-09-22/21-11-34/forecast_DDPM_UNet_1patch_coords/checkpoints/val_loss=0.01633-epoch=090.ckpt
+
+trainer:
+  max_epochs: 150
+
+model:
+  opt_fn:
+    lr: 3e-5
+
+entrypoints:
+  - _target_: pytorch_lightning.seed_everything
+    seed: 333
+  - _target_: contrib.generative.train_utils.warm_start_training
+    trainer: ${trainer}
+    lit_mod: ${model}
+    dm: ${datamodule}
+    init_ckpt: ${init_ckpt}

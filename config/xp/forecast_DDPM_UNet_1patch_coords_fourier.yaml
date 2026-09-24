@@ -1,0 +1,22 @@
+# @package _global_
+#
+# forecast_DDPM_UNet_1patch_coords with a multi-frequency Fourier encoding of
+# the coordinates (contrib.generative.coord_embeddings.build_fourier_coord_channels)
+# instead of the single sin/cos one:
+#   - lat: sin/cos(k*lat), k = 1, 2, 4, 8   -> 8 channels
+#   - lon: sin/cos(k*lon), k = 1, 2, 4, 8   -> 8 channels
+#   - DoY: sin/cos(k*doy), k = 1, 2 (patch middle day) -> 4 channels
+# input_channels = 58 (xt + masked obs) + 20 (coords) = 78
+# Everything else (data, trainer incl. clipping/accumulation, lr) is inherited
+# unchanged, so the run is comparable to the sin/cos coords xp.
+
+defaults:
+  - forecast_DDPM_UNet_1patch_coords
+  - _self_
+
+datamodule:
+  _target_: contrib.glorys12.DistinctNormDataModuleWithFourierCoords
+
+model:
+  solver:
+    input_channels: 78

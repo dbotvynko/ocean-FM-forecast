@@ -20,7 +20,7 @@ from omegaconf import OmegaConf
 from pathlib import Path
 import hydra
 
-from contrib.generative.coord_embeddings import build_coord_channels
+from contrib.generative.coord_embeddings import build_coord_channels, build_fourier_coord_channels
 
 # Exceptions
 # ----------
@@ -101,15 +101,19 @@ class DistinctNormDataModuleWithCoords(DistinctNormDataModule):
     already bounded via sin/cos, so it needs no normalization.
     """
 
+    # overridden by subclasses that use another coordinate encoding
+    dataset_cls = None  # resolved to LazyXrDatasetWithCoords (defined below)
+
     def setup(self, stage="test"):
-        self.train_ds = LazyXrDatasetWithCoords(
+        dataset_cls = self.dataset_cls or LazyXrDatasetWithCoords
+        self.train_ds = dataset_cls(
             self.input_da.sel(self.domains["train"]),
             **self.xrds_kw["train"],
             postpro_fn=self.post_fn("train"),
             mask=self.input_mask,
         )
 
-        self.val_ds = LazyXrDatasetWithCoords(
+        self.val_ds = dataset_cls(
             self.input_da.sel(self.domains["val"]),
             **self.xrds_kw["val"],
             postpro_fn=self.post_fn("val"),
@@ -230,6 +234,9 @@ class LazyXrDatasetWithCoords(LazyXrDataset):
     conditioning xp.
     """
 
+    # overridden by subclasses that use another coordinate encoding
+    coord_builder = staticmethod(build_coord_channels)
+
     def __getitem__(self, item):
         base = super().__getitem__(item)
         if self.return_coords:
@@ -239,9 +246,25 @@ class LazyXrDatasetWithCoords(LazyXrDataset):
         lat_vals = self.ds.lat.isel(lat=sl["lat"]).values
         lon_vals = self.ds.lon.isel(lon=sl["lon"]).values
         time_vals = self.ds.time.isel(time=sl["time"]).values
-        coords = build_coord_channels(lat_vals, lon_vals, time_vals)
+        coords = self.coord_builder(lat_vals, lon_vals, time_vals)
 
         return TrainingItemWithCoords(input=base.input, tgt=base.tgt, coords=coords)
+
+
+class LazyXrDatasetWithFourierCoords(LazyXrDatasetWithCoords):
+    """
+    LazyXrDatasetWithCoords with a multi-frequency Fourier encoding of the
+    coordinates (contrib.generative.coord_embeddings.build_fourier_coord_channels)
+    instead of the single-frequency sin/cos one.
+    """
+
+    coord_builder = staticmethod(build_fourier_coord_channels)
+
+
+class DistinctNormDataModuleWithFourierCoords(DistinctNormDataModuleWithCoords):
+    """DistinctNormDataModuleWithCoords yielding Fourier-encoded coordinates."""
+
+    dataset_cls = LazyXrDatasetWithFourierCoords
 
 
 def load_glorys12_data(tgt_path, inp_path, tgt_var="zos", inp_var="input"):
