@@ -1,0 +1,24 @@
+# @package _global_
+#
+# Coordinate-free FM UNet (forecast_DDPM_UNet_1patch) retrained with the
+# coords xps' training setup, so it can be compared to them like for like:
+#   - gradient_clip_val 0.2, accumulate_grad_batches 16, bf16-mixed
+#     (the base xp: 0.5, no accumulation, fp32 -- i.e. 16x more optimizer
+#     steps per epoch than the coords runs)
+#   - max_epochs 300
+#   - train/val losses averaged over both GPUs (GenFlowLitSynced), as in the
+#     Fourier / learned Fourier xps
+# Data, UNet (input_channels 58), lr and seed are the base xp's.
+
+defaults:
+  - forecast_DDPM_UNet_1patch
+  - _self_
+
+trainer:
+  gradient_clip_val: 0.2
+  precision: bf16-mixed
+  accumulate_grad_batches: 16
+  max_epochs: 300
+
+model:
+  _target_: contrib.generative.models.GenFlowLitSynced

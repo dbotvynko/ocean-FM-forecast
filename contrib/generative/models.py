@@ -189,6 +189,27 @@ class GenFlowLit(pl.LightningModule):
         return returns
 
 
+class GenFlowLitSynced(GenFlowLit):
+    """
+    GenFlowLit with the epoch-level train/val losses averaged over all DDP
+    ranks (sync_dist=True), like GenFlowLitWithCoordsSynced, so the base
+    (coordinate-free) xp can be run under the same logging/checkpoint
+    selection as the Fourier coords xps.
+    """
+
+    def step(self, batch, phase=""):
+        if self.training and batch.tgt.isfinite().float().mean() < 0.1:
+            return None, None
+
+        out = self(batch=batch.input)
+        loss = self.weighted_mse(out - self.bs, self.rec_weight)
+        with torch.no_grad():
+            self.log(f"{phase}_loss", loss, prog_bar=True, on_step=False, on_epoch=True,
+                     sync_dist=True)
+
+        return loss, out
+
+
 class GenFlowLitWithCoords(GenFlowLit):
     """
     GenFlowLit variant that conditions the solver on a per-pixel lat/lon/DoY
