@@ -23,6 +23,7 @@ import xarray as xr
 PATCH_TIME_DEFAULT = 29
 
 InferenceItem = namedtuple("InferenceItem", ["input"])
+InferenceItemWithCoords = namedtuple("InferenceItemWithCoords", ["input", "coords"])
 
 
 def load_gridded_sla(path, var="sla_unfiltered", lat_slice=None, lon_slice=None):
@@ -48,18 +49,41 @@ def load_gen_flow_checkpoint(model, ckpt_path, device="cuda"):
     return model.to(device).eval()
 
 
-def build_forecast_window(sla_da, start_date, norm_stats, patch_time=PATCH_TIME_DEFAULT):
+def coord_builder_for(cfg):
+    """
+    The coordinate builder the xp's training dataset used (None for the
+    base, coordinate-free xps), so inference feeds the same coords stack.
+    """
+    import hydra
+    from contrib.glorys12 import DistinctNormDataModuleWithCoords, LazyXrDatasetWithCoords
+
+    dm_cls = hydra.utils.get_class(cfg.datamodule._target_)
+    if not issubclass(dm_cls, DistinctNormDataModuleWithCoords):
+        return None
+    return (dm_cls.dataset_cls or LazyXrDatasetWithCoords).coord_builder
+
+
+def build_forecast_window(sla_da, start_date, norm_stats, patch_time=PATCH_TIME_DEFAULT,
+                          coord_builder=None):
     """
     Build a normalized (1, patch_time, lat, lon) input tensor for the window
     starting at `start_date`, plus the raw (un-normalized) window DataArray
     used as evaluation truth.
+
+    coord_builder: for the coords xps (GenFlowLitWithCoords and subclasses),
+    the same contrib.generative.coord_embeddings builder the training dataset
+    used; the item then also carries its (1, C, lat, lon) coordinate stack.
     """
     m, s = norm_stats
     dates = pd.date_range(start_date, periods=patch_time, freq="D")
     window = sla_da.sel(time=dates)
     values = (window.values - m) / s
     tensor = torch.from_numpy(np.asarray(values)).float().unsqueeze(0)
-    return InferenceItem(input=tensor), window
+    if coord_builder is None:
+        return InferenceItem(input=tensor), window
+    coords = coord_builder(window.lat.values, window.lon.values, window.time.values)
+    coords = torch.from_numpy(coords).unsqueeze(0)
+    return InferenceItemWithCoords(input=tensor, coords=coords), window
 
 
 def leadtime_indices(patch_time=PATCH_TIME_DEFAULT, leadtimes=range(7)):
@@ -166,8 +190,10 @@ class YearlyLeadtimeEvaluator:
         patch_time=PATCH_TIME_DEFAULT,
         leadtimes=range(7),
         num_samples=1,
+        coord_builder=None,
     ):
         self.model = model
+        self.coord_builder = coord_builder
         self.sla_da = sla_da
         self.norm_stats = norm_stats
         self.patch_time = patch_time
@@ -177,7 +203,8 @@ class YearlyLeadtimeEvaluator:
 
     def run_day(self, start_date):
         item, window = build_forecast_window(
-            self.sla_da, start_date, self.norm_stats, self.patch_time
+            self.sla_da, start_date, self.norm_stats, self.patch_time,
+            coord_builder=self.coord_builder,
         )
         truth = window.values
 
