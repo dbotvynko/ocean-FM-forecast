@@ -283,6 +283,87 @@ class DistinctNormDataModuleWithRawCoords(DistinctNormDataModuleWithCoords):
     dataset_cls = LazyXrDatasetWithRawCoords
 
 
+class LazyXrDatasetOSE(LazyXrDataset):
+    """
+    OSE (real data) counterpart of LazyXrDataset: the input is real gridded
+    L3 nadir observations and the target a separate L4 product (e.g. DUACS),
+    instead of pseudo-observations masked out of the target.
+
+    `ds` is the observation DataArray; it defines the patch grid (so the
+    target is padded with NaN wherever its own grid is smaller, e.g. DUACS
+    stops at 81.75N while the patch domain goes to 89.75N -- NaN targets are
+    ignored by GenFlowLit.weighted_mse). `tgt_da` must share its lon grid and
+    have its lat values on the obs lat grid.
+    """
+
+    def __init__(self, ds, *args, tgt_da=None, **kwargs):
+        kwargs.pop("mask", None)
+        super().__init__(ds, *args, **kwargs)
+        self.tgt_da = tgt_da
+
+    def __getitem__(self, item):
+        sl = self._index_to_slice(item)
+        obs = self.ds.isel(**sl)
+        if self.return_coords:
+            return obs.coords.to_dataset()[list(self.patch_dims)]
+
+        lat = obs.lat.values
+        tgt = (
+            self.tgt_da.sel(time=obs.time.values, lon=obs.lon.values,
+                            lat=slice(lat.min(), lat.max()))
+            .load()
+            .reindex(lat=lat)
+        )
+        item = np.stack([obs.values, tgt.values]).astype(np.float32)  # sorted: input, tgt
+
+        if self.postpro_fn is not None:
+            return self.postpro_fn(item)
+        return item
+
+
+class DistinctNormDataModuleOSE(DistinctNormDataModule):
+    """
+    DistinctNormDataModule for OSE training: `input_da` is (tgt, obs) as
+    returned by load_l4_target_l3_obs, and items pair the real observations
+    (input) with the L4 target over the obs grid. Input and target are
+    normalized with the same (target) stats, as in the OSSE xps.
+    """
+
+    def setup(self, stage="test"):
+        tgt_da, obs_da = self.input_da, self.input_mask
+        for phase in ("train", "val"):
+            ds = LazyXrDatasetOSE(
+                obs_da.sel(self.domains[phase]),
+                **self.xrds_kw[phase],
+                postpro_fn=self.post_fn(phase),
+                tgt_da=tgt_da.sel(self.domains[phase]),
+            )
+            setattr(self, f"{phase}_ds", ds)
+
+
+def load_l4_target_l3_obs(tgt_path, inp_path, tgt_var="sla", inp_var="sla_unfiltered"):
+    """
+    Lazily open an L4 target (e.g. DUACS) and gridded real L3 observations on
+    the same 0.25deg grid, restricted to their common time span. Returns
+    (tgt, obs) for DistinctNormDataModuleOSE.
+    """
+    print('..... Start lazy loading (OSE)', flush=True)
+
+    def _open(path, var):
+        ds = xr.open_dataset(path)
+        if "latitude" in ds.dims:
+            ds = ds.rename(latitude="lat", longitude="lon")
+        return ds[var]
+
+    tgt = _open(tgt_path, tgt_var)
+    obs = _open(inp_path, inp_var)
+    times = np.intersect1d(tgt.time.values, obs.time.values)
+    tgt = tgt.sel(time=slice(times[0], times[-1]))
+    obs = obs.sel(time=slice(times[0], times[-1]))
+    print('..... L4 target', dict(tgt.sizes), '| L3 obs', dict(obs.sizes), flush=True)
+    return tgt, obs
+
+
 def load_glorys12_data(tgt_path, inp_path, tgt_var="zos", inp_var="input"):
     isel = None  # dict(time=slice(-465, -265))
 

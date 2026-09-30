@@ -1,0 +1,33 @@
+# @package _global_
+#
+# forecast_DDPM_UNet_1patch_nocoords_matched in the OSE setting: trained on
+# real data instead of GLORYS12.
+#   - target: DUACS L4 SLA (DT, 0.25deg, referenced to 1993-2012 -- the same
+#     convention as the NRT products the models are evaluated on)
+#   - input: real L3 nadir SLA (sla_unfiltered) gridded to 0.25deg, instead
+#     of GLORYS12 masked with a (cyclic) nadir obs mask
+# DUACS stops at 81.75N; the target is NaN-padded to the obs/patch grid
+# (-80..89.75N) and those pixels are ignored by the loss.
+# Trainer, UNet, lr, seed, time split and patching are unchanged, so it is
+# comparable to the matched GLORYS12 run.
+# norm_stats: DUACS mean/std over the train/val periods (every 3rd day).
+
+defaults:
+  - forecast_DDPM_UNet_1patch_nocoords_matched
+  - _self_
+
+datamodule:
+  _target_: contrib.glorys12.DistinctNormDataModuleOSE
+  input_da:
+    _target_: contrib.glorys12.load_l4_target_l3_obs
+    tgt_path: /Odyssey/public/duacs/2010_2019/duacs_2010_2019_0.25deg_float32.nc
+    tgt_var: sla
+    inp_path: /Odyssey/public/altimetry_traces/2010_2023/gridded/sla_l3_all_2010_2023_0.25deg_convl4.nc
+    inp_var: sla_unfiltered
+  norm_stats:
+    train:
+    - 0.057035986334085464
+    - 0.09026068449020386
+    val:
+    - 0.07871516793966293
+    - 0.09727796167135239
