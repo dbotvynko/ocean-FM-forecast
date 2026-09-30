@@ -45,6 +45,20 @@ RUNS = {
 NUM_SEEDS = 3
 
 
+def best_checkpoint(xp):
+    """Lowest-val_loss checkpoint of the latest run of `xp` under outputs/, or None."""
+    ckpts = sorted((OUT.glob(f"*/*/{xp}/checkpoints/val_loss=*.ckpt")),
+                   key=lambda p: (p.parts[-5:-3], -float(p.name.split("=")[1].split("-")[0])))
+    return ckpts[-1].relative_to(OUT) if ckpts else None
+
+
+# runs whose best checkpoint is only known once they finish
+for _name, _xp in {"nocoords_matched": "forecast_DDPM_UNet_1patch_nocoords_matched"}.items():
+    _ckpt = best_checkpoint(_xp)
+    if _ckpt is not None:
+        RUNS[_name] = (_xp, str(_ckpt))
+
+
 @torch.no_grad()
 def window_losses(model, val_dl, seed):
     losses = []
