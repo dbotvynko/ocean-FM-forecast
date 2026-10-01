@@ -2,6 +2,25 @@ import numpy as np
 
 from ocean4dvarnet.utils import get_constant_crop
 
+def get_forecast_only_wei(patch_dims, **crop_kw):
+    """
+    Like get_forecast_wei, but with zero weight on the observed days: for
+    targets that are the observations themselves (L3), where the observed
+    half of the target is just the input.
+
+    0 where there are obs
+    linear from 1 to 0.5 for 7 days of forecast
+    0 elsewhere
+    """
+    pw = get_constant_crop(patch_dims, **crop_kw)
+    time_patch_weight = np.concatenate(
+        (np.zeros((patch_dims['time'] - 1) // 2),
+         np.linspace(1, 0.5, 7),
+         np.zeros((patch_dims['time'] + 1) // 2 - 7)),
+        axis=0)
+    return time_patch_weight[:, None, None] * pw
+
+
 def get_forecast_wei(patch_dims, **crop_kw):
     """
     return weight for forecast reconstruction:

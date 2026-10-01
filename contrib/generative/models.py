@@ -210,6 +210,40 @@ class GenFlowLitSynced(GenFlowLit):
         return loss, out
 
 
+class GenFlowLitSyncedSparseTgt(GenFlowLitSynced):
+    """
+    GenFlowLitSynced for a sparse target (real L3 observations, NaN off the
+    tracks):
+      - x_t is built from the target only where it is observed; elsewhere the
+        unknown x1 is taken as 0 (the normalized mean), i.e. x_t = (1-t)*x0, so
+        the solver sees full fields during training, as it does in sample().
+        The velocity target b = tgt - x0 stays NaN there, so the loss only
+        covers observed pixels.
+      - no "skip the batch if < 10% of the target is finite" check (L3 is a
+        few % per day); a batch with no observed pixel under a non-zero weight
+        gets a zero loss that keeps the graph (needed under DDP).
+    """
+
+    def gen_training_batch(self, batch):
+        batch = super().gen_training_batch(batch)
+        t = self.ts.view(-1, 1, 1, 1) / self.max_steps
+        self.xts = torch.where(self.xts.isfinite(), self.xts, self.x0s * (1 - t))
+        return batch
+
+    def step(self, batch, phase=""):
+        out = self(batch=batch.input)
+        observed = (out - self.bs).isfinite() & (self.rec_weight[None] != 0)
+        if observed.any():
+            loss = self.weighted_mse(out - self.bs, self.rec_weight)
+        else:
+            loss = (out * 0).sum()
+        with torch.no_grad():
+            self.log(f"{phase}_loss", loss, prog_bar=True, on_step=False, on_epoch=True,
+                     sync_dist=True)
+
+        return loss, out
+
+
 class GenFlowLitWithCoords(GenFlowLit):
     """
     GenFlowLit variant that conditions the solver on a per-pixel lat/lon/DoY

@@ -293,7 +293,8 @@ class LazyXrDatasetOSE(LazyXrDataset):
     target is padded with NaN wherever its own grid is smaller, e.g. DUACS
     stops at 81.75N while the patch domain goes to 89.75N -- NaN targets are
     ignored by GenFlowLit.weighted_mse). `tgt_da` must share its lon grid and
-    have its lat values on the obs lat grid.
+    have its lat values on the obs lat grid. tgt_da=None uses the
+    observations themselves as target (L3-target OSE).
     """
 
     def __init__(self, ds, *args, tgt_da=None, **kwargs):
@@ -307,14 +308,19 @@ class LazyXrDatasetOSE(LazyXrDataset):
         if self.return_coords:
             return obs.coords.to_dataset()[list(self.patch_dims)]
 
-        lat = obs.lat.values
-        tgt = (
-            self.tgt_da.sel(time=obs.time.values, lon=obs.lon.values,
-                            lat=slice(lat.min(), lat.max()))
-            .load()
-            .reindex(lat=lat)
-        )
-        item = np.stack([obs.values, tgt.values]).astype(np.float32)  # sorted: input, tgt
+        obs_values = obs.values
+        if self.tgt_da is None:
+            tgt_values = obs_values
+        else:
+            lat = obs.lat.values
+            tgt_values = (
+                self.tgt_da.sel(time=obs.time.values, lon=obs.lon.values,
+                                lat=slice(lat.min(), lat.max()))
+                .load()
+                .reindex(lat=lat)
+                .values
+            )
+        item = np.stack([obs_values, tgt_values]).astype(np.float32)  # sorted: input, tgt
 
         if self.postpro_fn is not None:
             return self.postpro_fn(item)
@@ -336,7 +342,7 @@ class DistinctNormDataModuleOSE(DistinctNormDataModule):
                 obs_da.sel(self.domains[phase]),
                 **self.xrds_kw[phase],
                 postpro_fn=self.post_fn(phase),
-                tgt_da=tgt_da.sel(self.domains[phase]),
+                tgt_da=None if tgt_da is obs_da else tgt_da.sel(self.domains[phase]),
             )
             setattr(self, f"{phase}_ds", ds)
 
@@ -355,8 +361,11 @@ def load_l4_target_l3_obs(tgt_path, inp_path, tgt_var="sla", inp_var="sla_unfilt
             ds = ds.rename(latitude="lat", longitude="lon")
         return ds[var]
 
-    tgt = _open(tgt_path, tgt_var)
     obs = _open(inp_path, inp_var)
+    if (tgt_path, tgt_var) == (inp_path, inp_var):
+        print('..... target = the L3 observations themselves', flush=True)
+        return obs, obs
+    tgt = _open(tgt_path, tgt_var)
     times = np.intersect1d(tgt.time.values, obs.time.values)
     tgt = tgt.sel(time=slice(times[0], times[-1]))
     obs = obs.sel(time=slice(times[0], times[-1]))

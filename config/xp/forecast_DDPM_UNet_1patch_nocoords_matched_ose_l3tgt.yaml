@@ -1,0 +1,32 @@
+# @package _global_
+#
+# OSE matched no-coords FM UNet with the real L3 observations as target
+# (instead of DUACS L4): input and target both come from the gridded L3
+# nadir SLA (sla_unfiltered, 0.25deg).
+#   - GenFlowLitSyncedSparseTgt: x_t filled with (1-t)*x0 off the tracks,
+#     loss only at observed pixels, no "<10% finite target" batch skip
+#   - rec_weight: forecast days only (the observed half of an L3 target is
+#     just the input), same 1 -> 0.5 ramp over the 7 forecast days
+#   - norm_stats: L3 mean/std over the train/val periods (every 3rd day)
+# Trainer, UNet, lr, seed, time split and patching unchanged.
+
+defaults:
+  - forecast_DDPM_UNet_1patch_nocoords_matched_ose
+  - _self_
+
+datamodule:
+  input_da:
+    tgt_path: ${datamodule.input_da.inp_path}
+    tgt_var: ${datamodule.input_da.inp_var}
+  norm_stats:
+    train:
+    - 0.06953674554824829
+    - 0.096638523042202
+    val:
+    - 0.08377368003129959
+    - 0.10161007195711136
+
+model:
+  _target_: contrib.generative.models.GenFlowLitSyncedSparseTgt
+  rec_weight:
+    _target_: contrib.forecast.utils.get_forecast_only_wei
