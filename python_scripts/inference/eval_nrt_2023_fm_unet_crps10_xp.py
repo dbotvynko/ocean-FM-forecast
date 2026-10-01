@@ -1,4 +1,8 @@
 """
+Copy of eval_nrt_2023_fm_unet_crps10.py (kept as the original reference
+script for the initial no-coords run) that can evaluate any xp/checkpoint
+(--xp/--ckpt/--tag) including the coords xps.
+
 Evaluate the FM-UNet (forecast_DDPM_UNet_1patch) model on the 2023 NRT
 gridded SLA product, per lead time (0-6 days), computing the exact
 empirical CRPS (bias-corrected "fair" estimator, see
@@ -21,8 +25,11 @@ reads the checkpoint file and never writes into the training run's output
 directory, so it's safe to launch as a separate srun job in parallel.
 
 Usage:
-    python eval_nrt_2023_fm_unet_crps10.py [--season winter|summer]
-(edit CKPT_PATH below to point at whichever checkpoint you want to evaluate)
+    python eval_nrt_2023_fm_unet_crps10_xp.py [--season winter|summer]
+        [--xp XP --ckpt CKPT --tag TAG]
+Defaults evaluate the base FM-UNet checkpoint (CKPT_PATH below). For another
+xp (e.g. a coords one), pass its --xp and --ckpt, and a --tag so its outputs
+land in their own eval_nrt2023_fm_unet_crps10_<tag>[_<season>]/ dir.
 """
 
 import argparse
@@ -39,6 +46,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from contrib.generative.inference import (  # noqa: E402
     YearlyLeadtimeEvaluator,
+    coord_builder_for,
     load_gen_flow_checkpoint,
     load_gridded_sla,
 )
@@ -50,9 +58,12 @@ SEASON_RANGES = {
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--season", choices=sorted(SEASON_RANGES), default="winter")
+parser.add_argument("--xp", default="forecast_DDPM_UNet_1patch")
+parser.add_argument("--ckpt", default=None)
+parser.add_argument("--tag", default="")
 args = parser.parse_args()
 
-CKPT_PATH = (
+CKPT_PATH = args.ckpt or (
     "/Odyssey/private/d21botvy/forecast/ocean-DDPMs/outputs/2026-09-01/13-42-20/"
     "forecast_DDPM_UNet_1patch/checkpoints/val_loss=0.01161-epoch=153.ckpt"
 )
@@ -61,13 +72,13 @@ NRT_2023_VAR = "sla_unfiltered"
 # Separate dir from the mean/std-only ensemble5 run: this one's daily
 # files carry crps/crps_fair too, and a different num_samples. A season
 # suffix keeps a summer run from overwriting the original winter output.
-_out_suffix = "" if args.season == "winter" else f"_{args.season}"
+_out_suffix = (f"_{args.tag}" if args.tag else "") + ("" if args.season == "winter" else f"_{args.season}")
 OUT_DIR = f"/Odyssey/private/d21botvy/forecast/ocean-DDPMs/outputs/eval_nrt2023_fm_unet_crps10{_out_suffix}/"
 LEADTIMES = range(7)
 NUM_SAMPLES = 10
 
 with initialize_config_dir(version_base="1.3", config_dir=str(REPO_ROOT / "config")):
-    cfg = compose(config_name="main", overrides=["xp=forecast_DDPM_UNet_1patch"])
+    cfg = compose(config_name="main", overrides=[f"xp={args.xp}"])
 
 model = hydra.utils.instantiate(cfg.model)
 model = load_gen_flow_checkpoint(model, CKPT_PATH)
@@ -95,6 +106,7 @@ evaluator = YearlyLeadtimeEvaluator(
     patch_time=patch_time,
     leadtimes=LEADTIMES,
     num_samples=NUM_SAMPLES,
+    coord_builder=coord_builder_for(cfg),
 )
 
 rmses, crps_fair_means = evaluator.run_year_mean_std_crps(start_dates, out_dir=OUT_DIR)
