@@ -109,7 +109,7 @@ evaluator = YearlyLeadtimeEvaluator(
     coord_builder=coord_builder_for(cfg),
 )
 
-rmses, crps_fair_means = evaluator.run_year_mean_std_crps(start_dates, out_dir=OUT_DIR)
+rmses, crps_fair_means = evaluator.run_year_mean_std_crps(start_dates, out_dir=OUT_DIR, skip_existing=True)
 
 print()
 print("Per-window forecast_mean/forecast_std/crps/crps_fair/truth saved to:", OUT_DIR)

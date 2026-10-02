@@ -407,7 +407,7 @@ class YearlyLeadtimeEvaluator:
             attrs=dict(obs_days=obs_days, num_samples=self.num_samples),
         )
 
-    def run_year_mean_std_crps(self, start_dates, out_dir):
+    def run_year_mean_std_crps(self, start_dates, out_dir, skip_existing=False):
         """
         Like run_year_mean_std, but also writes the exact ensemble CRPS
         per leadtime/pixel (day_result_to_mean_std_crps_dataset) -- needs
@@ -420,6 +420,12 @@ class YearlyLeadtimeEvaluator:
         top of the full per-pixel maps already written to out_dir, so
         callers don't have to reopen the files just to see a headline
         number per leadtime.
+
+        skip_existing: reuse windows whose file is already in out_dir (read
+        back for the summaries) instead of recomputing them, so a stopped /
+        requeued job resumes where it was. Files are then written to a
+        temporary name and renamed, so an interrupted write is never taken
+        for a finished window.
         """
         rmses = {lt: [] for lt in self.leadtimes}
         crps_fair_means = {lt: [] for lt in self.leadtimes}
@@ -428,12 +434,28 @@ class YearlyLeadtimeEvaluator:
         out_dir.mkdir(parents=True, exist_ok=True)
 
         for start_date in start_dates:
+            out_path = out_dir / f"{pd.Timestamp(start_date).date()}.nc"
+
+            if skip_existing and out_path.exists():
+                try:
+                    with xr.open_dataset(out_path) as ds:
+                        for lt in self.leadtimes:
+                            rmses[lt].append(float(ds["rmse"].sel(leadtime=lt)))
+                            crps_fair_means[lt].append(float(ds["crps_fair"].sel(leadtime=lt).mean(skipna=True)))
+                    continue
+                except Exception as err:  # unreadable leftover: recompute it
+                    print(f"recomputing {out_path.name}: {err}", flush=True)
+
             day_result = self.run_day(start_date)
 
-            out_path = out_dir / f"{pd.Timestamp(start_date).date()}.nc"
             ds = self.day_result_to_mean_std_crps_dataset(start_date, day_result)
             encoding = {var: {"zlib": True, "complevel": 4} for var in ds.data_vars}
-            ds.to_netcdf(out_path, encoding=encoding)
+            if skip_existing:
+                tmp_path = out_path.with_suffix(".nc.tmp")
+                ds.to_netcdf(tmp_path, encoding=encoding)
+                tmp_path.replace(out_path)
+            else:
+                ds.to_netcdf(out_path, encoding=encoding)
 
             for lt in self.leadtimes:
                 rmses[lt].append(day_result[lt]["rmse"])

@@ -70,7 +70,7 @@ evaluator = YearlyLeadtimeEvaluator(
     num_samples=NUM_SAMPLES,
     coord_builder=coord_builder_for(cfg),
 )
-rmses_obs, _ = evaluator.run_year_mean_std_crps(START_DATES, out_dir=str(OUT_DIR))
+rmses_obs, _ = evaluator.run_year_mean_std_crps(START_DATES, out_dir=str(OUT_DIR), skip_existing=True)
 
 # RMSE / bias of the ensemble mean vs the L3 sla_filtered reference
 # (`truth` in the per-window files), per lead time
