@@ -21,7 +21,13 @@ import argparse
 import time
 from pathlib import Path
 
+import dask
 import xarray as xr
+
+# Single-threaded: dask's threaded scheduler reading from and writing to
+# NetCDF/HDF5 at the same time can deadlock (all threads stuck on the HDF5
+# lock, seen on a full 10-year copy); copying chunk by chunk avoids it.
+dask.config.set(scheduler="synchronous")
 
 parser = argparse.ArgumentParser()
 parser.add_argument("src")
