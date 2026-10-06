@@ -20,6 +20,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+import matplotlib.ticker  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import xarray as xr  # noqa: E402
@@ -52,6 +53,9 @@ def glo12_box(valid: pd.Timestamp, init: pd.Timestamp, sub_lat, sub_lon):
 
 def spectra(tag: str, leadtimes: list[int]) -> dict:
     """{lt: dict(freq_r, fm (starts, members, nf), hybrid (same), fm_mean, unet, glo12 (starts, nf))}."""
+    saved = [OUTPUTS / f"member_spectra_hybrid_2024_{tag}_leadtime{lt}.npz" for lt in leadtimes]
+    if all(path.exists() for path in saved):  # reuse the spectra of an earlier run
+        return {lt: dict(np.load(path)) for lt, path in zip(leadtimes, saved)}
     members_dir = OUTPUTS / f"eval_2024_oceanbench_members_{tag}"
     unet = {lt: xr.open_dataset(UNET_DIR / f"test_data_{OBS_DAYS + lt}.nc")["out"] for lt in leadtimes}
     out = {lt: {k: [] for k in ("fm", "hybrid", "fm_mean", "unet", "glo12")} for lt in leadtimes}
@@ -105,9 +109,13 @@ def plot(results: dict, leadtimes: list[int]) -> None:
             ax.plot(freq, first["glo12"].mean(0), color="#2a2a2a", linewidth=1.8, linestyle=":", label=f"GLO12 forecast ({len(first['glo12'])} starts)")
         ax.set_xscale("log"); ax.set_yscale("log")
         ax.set_xlabel("Wavenumber [cycles/km]")
+        ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
         ax.set_title(f"Lead day {lt + 1}")
         ax.grid(True, which="both", linewidth=0.4, alpha=0.3)
         secondary = ax.secondary_xaxis("top", functions=(lambda k: 1 / np.maximum(k, 1e-9), lambda w: 1 / np.maximum(w, 1e-9)))
+        secondary.set_xticks([400, 200, 100, 50])
+        secondary.xaxis.set_major_formatter(matplotlib.ticker.FormatStrFormatter("%d"))
+        secondary.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
         secondary.set_xlabel("Wavelength [km]")
     np.atleast_1d(axes)[0].set_ylabel("PSD [m$^2$/(cycles/km)]")
     np.atleast_1d(axes)[-1].legend(frameon=False, fontsize=7.5, loc="lower left")
