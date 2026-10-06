@@ -4,8 +4,11 @@ truth) into the mean/std/CRPS window files of eval_2024_oceanbench_fm_unet_sla_f
 (YearlyLeadtimeEvaluator.day_result_to_mean_std_crps_dataset), so that a members run feeds the existing OceanBench
 pipeline (oceanbench_eval/postprocess_fm.sh) unchanged. CPU only.
 
+TRUTH_TAG: take `truth` (and score CRPS / RMSE against it) from another members run, e.g. the NRT nadir run for runs fed
+with CLS Nadir + SWOT, whose own truth would contain SWOT pixels.
+
 Usage:
-    python members_to_mean_std_crps_2024.py TAG     # outputs/eval_2024_oceanbench_members_TAG -> ..._wednesdays_TAG
+    python members_to_mean_std_crps_2024.py TAG [TRUTH_TAG]   # outputs/eval_2024_oceanbench_members_TAG -> ..._wednesdays_TAG
 """
 
 import sys
@@ -21,6 +24,7 @@ from contrib.generative.inference import crps_ensemble, crps_ensemble_fair  # no
 
 OUTPUTS = REPO_ROOT / "outputs"
 tag = sys.argv[1]
+truth_dir = OUTPUTS / f"eval_2024_oceanbench_members_{sys.argv[2] if len(sys.argv) > 2 else tag}"
 in_dir, out_dir = OUTPUTS / f"eval_2024_oceanbench_members_{tag}", OUTPUTS / f"eval_2024_oceanbench_wednesdays_{tag}"
 out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -28,7 +32,9 @@ for path in sorted(in_dir.glob("2024-*.nc")):
     if (out_dir / path.name).exists():
         continue
     with xr.open_dataset(path) as ds:
-        members, truth = ds.forecast.values, ds.truth.values  # (sample, leadtime, lat, lon), (leadtime, lat, lon)
+        members = ds.forecast.values  # (sample, leadtime, lat, lon)
+        with xr.open_dataset(truth_dir / path.name) as reference:
+            truth = reference.truth.values  # (leadtime, lat, lon)
         mean = members.mean(axis=0)
         rmse = np.array([np.sqrt(np.nanmean((mean[k] - truth[k])[np.isfinite(truth[k])] ** 2)) for k in range(truth.shape[0])])
         variables = {
