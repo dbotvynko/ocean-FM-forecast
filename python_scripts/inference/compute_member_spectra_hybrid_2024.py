@@ -7,8 +7,11 @@ Reads the member files written by eval_2024_oceanbench_fm_unet_members.py (no GP
 compute_member_spectra_fm_unet_crps10.py; GLO12 forecasts added where the 2024 files exist. Spectra are computed per
 forecast start and averaged over the 48 Wednesday starts.
 
+With --swot, the hybrids are also centred on the Nadir+SWOT UNet, and one figure per TAG compares the Nadir and
+Nadir+SWOT centres (UNet and hybrid members) with the ratio of their spectra.
+
 Usage:
-    python compute_member_spectra_hybrid_2024.py TAG [TAG ...] [--leadtimes 0 2 4 6]
+    python compute_member_spectra_hybrid_2024.py TAG [TAG ...] [--leadtimes 0 2 4 6] [--swot]
       TAG: suffix of outputs/eval_2024_oceanbench_members_<TAG>/ (e.g. ose_ep233 osse_ep153)
 """
 
@@ -31,7 +34,8 @@ from compute_spectra_deterministic_vs_ensemble_crps10 import (  # noqa: E402
 )
 
 OUTPUTS = Path("/Odyssey/private/d21botvy/forecast/ocean-DDPMs/outputs/")
-UNET_DIR = Path("/Odyssey/public/glorys/rec/forecast_Unet_SLA_1patch_OSSE_NadirOnly_inp_NadirNoSwonOnlyCLS_eval2024/nrt_sla/")
+UNET_DIRS = {"nadir_only": Path("/Odyssey/public/glorys/rec/forecast_Unet_SLA_1patch_OSSE_NadirOnly_inp_NadirNoSwonOnlyCLS_eval2024/nrt_sla/"),
+             "nadir_swot": Path("/Odyssey/public/glorys/rec/forecast_Unet_SLA_1patch_OSSE_NadirOnly_inp_NadirSwotCLSReformatted_eval2024/nrt_sla/")}
 GLO12_ROOT = Path("/Odyssey/public/glorys/mercator_forecast/glo12/")
 WEDNESDAYS = pd.date_range("2024-01-17", "2024-12-11", freq="7D")
 OBS_DAYS = 14
@@ -51,13 +55,14 @@ def glo12_box(valid: pd.Timestamp, init: pd.Timestamp, sub_lat, sub_lon):
     return regrid_to_target(zos[np.ix_(latmask, lonmask)], GLO12_LAT[latmask], GLO12_LON[lonmask], sub_lat, sub_lon)
 
 
-def spectra(tag: str, leadtimes: list[int]) -> dict:
+def spectra(tag: str, leadtimes: list[int], centre: str = "nadir_only") -> dict:
     """{lt: dict(freq_r, fm (starts, members, nf), hybrid (same), fm_mean, unet, glo12 (starts, nf))}."""
-    saved = [OUTPUTS / f"member_spectra_hybrid_2024_{tag}_leadtime{lt}.npz" for lt in leadtimes]
+    suffix = "" if centre == "nadir_only" else f"_{centre}"
+    saved = [OUTPUTS / f"member_spectra_hybrid_2024_{tag}{suffix}_leadtime{lt}.npz" for lt in leadtimes]
     if all(path.exists() for path in saved):  # reuse the spectra of an earlier run
         return {lt: dict(np.load(path)) for lt, path in zip(leadtimes, saved)}
     members_dir = OUTPUTS / f"eval_2024_oceanbench_members_{tag}"
-    unet = {lt: xr.open_dataset(UNET_DIR / f"test_data_{OBS_DAYS + lt}.nc")["out"] for lt in leadtimes}
+    unet = {lt: xr.open_dataset(UNET_DIRS[centre] / f"test_data_{OBS_DAYS + lt}.nc")["out"] for lt in leadtimes}
     out = {lt: {k: [] for k in ("fm", "hybrid", "fm_mean", "unet", "glo12")} for lt in leadtimes}
     for wednesday in WEDNESDAYS:
         ds = xr.open_dataset(members_dir / f"{(wednesday - pd.Timedelta(days=OBS_DAYS)).date()}.nc")
@@ -78,11 +83,11 @@ def spectra(tag: str, leadtimes: list[int]) -> dict:
             g = glo12_box(valid, wednesday, sub_lat, sub_lon)
             if g is not None:
                 out[lt]["glo12"].append(psd(g).values)
-        print(tag, wednesday.date(), flush=True)
+        print(tag, centre, wednesday.date(), flush=True)
     for lt in leadtimes:
         for k in ("fm", "hybrid", "fm_mean", "unet", "glo12"):
             out[lt][k] = np.array(out[lt][k])
-        np.savez(OUTPUTS / f"member_spectra_hybrid_2024_{tag}_leadtime{lt}.npz", **out[lt])
+        np.savez(OUTPUTS / f"member_spectra_hybrid_2024_{tag}{suffix}_leadtime{lt}.npz", **out[lt])
     return out
 
 
@@ -127,10 +132,60 @@ def plot(results: dict, leadtimes: list[int]) -> None:
     print("Saved:", out, flush=True)
 
 
+def plot_swot(nadir: dict, swot: dict, tag: str, leadtimes: list[int], name: str = None) -> None:
+    """UNet and hybrid spectra with Nadir vs Nadir+SWOT centres (top) and their ratio Nadir+SWOT / Nadir (bottom)."""
+    name = name or LABELS.get(tag, tag)
+    fig, axes = plt.subplots(2, len(leadtimes), figsize=(4.6 * len(leadtimes), 7.6), sharex=True, gridspec_kw={"height_ratios": [2.2, 1]})
+    for col, lt in enumerate(leadtimes):
+        ax, ratio_ax = axes[0, col], axes[1, col]
+        freq = nadir[lt]["freq_r"]
+        band(ax, freq, nadir[lt]["hybrid"], "#2a78d6", f"Hybrid members, Nadir UNet + FM {name} deviation")
+        band(ax, freq, swot[lt]["hybrid"], "#eb6834", f"Hybrid members, Nadir+SWOT UNet + FM {name} deviation")
+        ax.plot(freq, nadir[lt]["unet"].mean(0), color="#2a78d6", linewidth=2, linestyle="--", label="Deterministic UNet, Nadir input")
+        ax.plot(freq, swot[lt]["unet"].mean(0), color="#eb6834", linewidth=2, linestyle="--", label="Deterministic UNet, Nadir+SWOT input")
+        if len(nadir[lt]["glo12"]):
+            ax.plot(freq, nadir[lt]["glo12"].mean(0), color="#2a2a2a", linewidth=1.8, linestyle=":", label=f"GLO12 forecast ({len(nadir[lt]['glo12'])} starts)")
+        ax.set_yscale("log"); ax.set_title(f"Lead day {lt + 1}")
+        ratio_ax.axhline(1, color="black", linewidth=0.8)
+        ratio_ax.plot(freq, swot[lt]["unet"].mean(0) / nadir[lt]["unet"].mean(0), color="#a8442b", linewidth=2, linestyle="--", label="Deterministic UNet")
+        ratio_ax.plot(freq, np.median(swot[lt]["hybrid"].mean(0), 0) / np.median(nadir[lt]["hybrid"].mean(0), 0), color="#a8442b", linewidth=1.8, label="Hybrid, median member")
+        ratio_ax.set_xlabel("Wavenumber [cycles/km]")
+        for a in (ax, ratio_ax):
+            a.set_xscale("log"); a.grid(True, which="both", linewidth=0.4, alpha=0.3)
+            a.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
+        secondary = ax.secondary_xaxis("top", functions=(lambda k: 1 / np.maximum(k, 1e-9), lambda w: 1 / np.maximum(w, 1e-9)))
+        secondary.set_xticks([400, 200, 100, 50])
+        secondary.xaxis.set_major_formatter(matplotlib.ticker.FormatStrFormatter("%d"))
+        secondary.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
+        secondary.set_xlabel("Wavelength [km]")
+    axes[0, 0].set_ylabel("PSD [m$^2$/(cycles/km)]")
+    axes[1, 0].set_ylabel("PSD ratio Nadir+SWOT / Nadir")
+    axes[0, -1].legend(frameon=False, fontsize=7.5, loc="lower left")
+    axes[1, -1].legend(frameon=False, fontsize=7.5, loc="upper left")
+    fig.suptitle(f"Effect of SWOT input on Gulf Stream SLA spectra ({LAT_BOUNDS[0]}–{LAT_BOUNDS[1]}°N, {-LON_BOUNDS[0]}–{-LON_BOUNDS[1]}°W), "
+                 f"48 OceanBench 2024 starts; hybrid spread from the FM {name} members", fontsize=11)
+    fig.tight_layout()
+    out = OUTPUTS / "figures" / f"member_spectra_hybrid_2024_swot_{tag}.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    print("Saved:", out, flush=True)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("tags", nargs="+")
     parser.add_argument("--leadtimes", type=int, nargs="+", default=[0, 2, 4, 6])
+    parser.add_argument("--swot", action="store_true", help="also centre the hybrids on the Nadir+SWOT UNet and draw the SWOT figure per tag")
+    parser.add_argument("--swot-pair", nargs=2, metavar=("TAG_NADIR", "TAG_SWOT"),
+                        help="FM runs fed with Nadir and with Nadir+SWOT input: compare UNet Nadir + FM(Nadir) deviations "
+                             "with UNet Nadir+SWOT + FM(Nadir+SWOT) deviations (figure ..._swot_<TAG_SWOT>.png), then stop")
     args = parser.parse_args()
+    if args.swot_pair:
+        tag_nadir, tag_swot = args.swot_pair
+        plot_swot(spectra(tag_nadir, args.leadtimes), spectra(tag_swot, args.leadtimes, "nadir_swot"), tag_swot, args.leadtimes,
+                  name="(FM fed with the same input as the UNet)")
+        sys.exit(0)
     results = {tag: spectra(tag, args.leadtimes) for tag in args.tags}
     plot(results, args.leadtimes)
+    if args.swot:
+        for tag in args.tags:
+            plot_swot(results[tag], spectra(tag, args.leadtimes, "nadir_swot"), tag, args.leadtimes)

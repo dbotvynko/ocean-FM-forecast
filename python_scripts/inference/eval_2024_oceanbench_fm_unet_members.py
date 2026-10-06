@@ -8,7 +8,7 @@ The starts can be split over several jobs (--part i --nparts n takes every n-th 
 are skipped, and files are written to a temporary name then renamed, so a requeued job resumes where it stopped.
 
 Usage:
-    python eval_2024_oceanbench_fm_unet_members.py --xp XP --ckpt CKPT --tag TAG [--part I --nparts N]
+    python eval_2024_oceanbench_fm_unet_members.py --xp XP --ckpt CKPT --tag TAG [--part I --nparts N] [--input PATH --var VAR]
 """
 
 import argparse
@@ -36,10 +36,11 @@ parser.add_argument("--ckpt", required=True)
 parser.add_argument("--tag", required=True)
 parser.add_argument("--part", type=int, default=0)
 parser.add_argument("--nparts", type=int, default=1)
+parser.add_argument("--input", default="/Odyssey/public/altimetry_traces/2024/NRT_REAL_no_swon/gridded/gridded_input.nc",
+                    help="gridded SLA input (default: 2024 NRT nadir without SWOT nadir; see prepare_cls_inputs_2024.py for CLS)")
+parser.add_argument("--var", default="sla_filtered")
 args = parser.parse_args()
 
-NRT_PATH = "/Odyssey/public/altimetry_traces/2024/NRT_REAL_no_swon/gridded/gridded_input.nc"  # 2024 NRT nadir (no SWOT nadir)
-NRT_VAR = "sla_filtered"
 WEDNESDAYS = pd.date_range("2024-01-17", "2024-12-11", freq="7D")
 START_DATES = (WEDNESDAYS - pd.Timedelta(days=14))[args.part::args.nparts]  # window start; lead day 0 is valid on the Wednesday
 OUT_DIR = Path(f"/Odyssey/private/d21botvy/forecast/ocean-DDPMs/outputs/eval_2024_oceanbench_members_{args.tag}/")
@@ -51,10 +52,10 @@ with initialize_config_dir(version_base="1.3", config_dir=str(REPO_ROOT / "confi
 
 model = hydra.utils.instantiate(cfg.model)
 model = load_gen_flow_checkpoint(model, args.ckpt)
-print("xp:", args.xp, "| ckpt:", args.ckpt, "| part", args.part, "of", args.nparts, flush=True)
+print("xp:", args.xp, "| ckpt:", args.ckpt, "| input:", args.input, args.var, "| part", args.part, "of", args.nparts, flush=True)
 
 domain_train = hydra.utils.instantiate(cfg.domain.train)
-sla_da = load_gridded_sla(NRT_PATH, var=NRT_VAR, lat_slice=domain_train["lat"], lon_slice=domain_train["lon"])
+sla_da = load_gridded_sla(args.input, var=args.var, lat_slice=domain_train["lat"], lon_slice=domain_train["lon"])
 evaluator = YearlyLeadtimeEvaluator(
     model,
     sla_da,

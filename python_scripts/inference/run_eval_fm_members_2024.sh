@@ -10,7 +10,7 @@
 #
 # OceanBench 2024: FM UNet forecasts with all 10 members saved, 48 Wednesday starts split over 4 array tasks
 # (python_scripts/inference/eval_2024_oceanbench_fm_unet_members.py). Resumes with existing window files.
-# Usage: sbatch [--begin=20:00] run_eval_fm_members_2024.sh <xp> <ckpt (abs path)> <tag>
+# Usage: sbatch [--begin=20:00] run_eval_fm_members_2024.sh <xp> <ckpt (abs path)> <tag> [<input .nc>]
 
 export HOME=/Odyssey/private/d21botvy/
 export TMPDIR=/tmp
@@ -20,4 +20,4 @@ cd /Odyssey/private/d21botvy/forecast/ocean-DDPMs
 conda activate ddpm-env
 export HYDRA_FULL_ERROR=1
 srun python python_scripts/inference/eval_2024_oceanbench_fm_unet_members.py --xp "$1" --ckpt "$2" --tag "$3" \
-    --part "$SLURM_ARRAY_TASK_ID" --nparts 4
+    --part "$SLURM_ARRAY_TASK_ID" --nparts 4 ${4:+--input "$4"}
