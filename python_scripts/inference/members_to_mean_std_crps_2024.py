@@ -47,5 +47,7 @@ for path in sorted(in_dir.glob("2024-*.nc")):
                          coords={c: ds[c] for c in ("leadtime", "valid_time", "lat", "lon", "init_time")}, attrs=ds.attrs)
         out["rmse"] = ("leadtime", rmse.astype(np.float32))
         out.attrs["num_samples"] = members.shape[0]
-    out.to_netcdf(out_dir / path.name, encoding={v: {"zlib": True, "complevel": 4} for v in out.data_vars})
+    tmp = out_dir / (path.name + ".tmp")  # write then rename, so an interrupted write is never taken for a finished file
+    out.to_netcdf(tmp, encoding={v: {"zlib": True, "complevel": 4} for v in out.data_vars})
+    tmp.replace(out_dir / path.name)
     print(path.name, "rmse", np.round(rmse, 4), flush=True)
