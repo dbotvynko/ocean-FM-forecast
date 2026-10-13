@@ -1,0 +1,22 @@
+# @package _global_
+#
+# forecast_DDPM_UNet_1patch_nocoords_matched_ose_l3tgt (real L3 input and
+# target) with a Gaussian flow source x0 ~ N(0, I) instead of U[0, 1)
+# (contrib.generative.models.GenFlowLitSyncedSparseTgtGaussian).
+#
+# The U[0, 1) run overfitted after ~70 epochs (best val_loss at epoch 67), so
+# this one stops at 120 epochs while keeping exactly the same learning-rate
+# schedule (cosine with T_max = 300, as with max_epochs = 300): the first 120
+# epochs are directly comparable with that run.
+
+defaults:
+  - forecast_DDPM_UNet_1patch_nocoords_matched_ose_l3tgt
+  - _self_
+
+trainer:
+  max_epochs: 120
+
+model:
+  _target_: contrib.generative.models.GenFlowLitSyncedSparseTgtGaussian
+  opt_fn:
+    T_max: 300

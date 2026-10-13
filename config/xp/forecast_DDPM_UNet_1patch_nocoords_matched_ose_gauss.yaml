@@ -1,0 +1,14 @@
+# @package _global_
+#
+# forecast_DDPM_UNet_1patch_nocoords_matched_ose (DUACS target, real L3 input)
+# with a Gaussian flow source x0 ~ N(0, I) instead of U[0, 1)
+# (contrib.generative.models.GenFlowLitSyncedGaussian), in training and
+# sampling. Everything else (data, norm stats, trainer, UNet, lr, seed) is
+# the OSE xp's, so the two are directly comparable.
+
+defaults:
+  - forecast_DDPM_UNet_1patch_nocoords_matched_ose
+  - _self_
+
+model:
+  _target_: contrib.generative.models.GenFlowLitSyncedGaussian

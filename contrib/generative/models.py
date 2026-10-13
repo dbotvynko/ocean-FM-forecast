@@ -373,3 +373,76 @@ def cosanneal_lr_adam(lit_mod, lr, T_max=100, weight_decay=0.):
         "optimizer": opt,
         "lr_scheduler": torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=T_max),
     }
+
+# Gaussian source distribution
+# ----------------------------
+# The classes above draw the flow's source sample x0 from U[0, 1)
+# (torch.rand_like): mean 0.5, std 0.29, while the normalized SLA is roughly
+# N(0, 1). Since sample() is a deterministic Euler ODE, x0 is the only source
+# of ensemble spread. The classes below use the standard flow-matching source
+# N(0, I) instead, in both training and sampling; everything else (linear
+# path, velocity target, loss, Euler steps) is inherited unchanged. A model
+# trained with one source must be sampled with the same one.
+
+
+class GaussianSourceFlowMixin(GenFlowLit):
+    """
+    GenFlowLit with x0 ~ N(0, I) in gen_training_batch and sample().
+
+    Meant to be combined in front of an existing GenFlowLit subclass, e.g.
+    class Foo(GenFlowLitSynced, GaussianSourceFlowMixin): the MRO then puts
+    this class right before GenFlowLit, so the subclass's own overrides
+    (step, sparse-target handling, ...) still apply on top of it.
+    """
+
+    @staticmethod
+    def source_noise(like):
+        return torch.randn_like(like)
+
+    def gen_training_batch(self, batch):
+        batch = self.mask_batch(batch)
+
+        batch_size = batch.input.size()[0]
+        self.ts = torch.randint(self.max_steps, (batch_size,)).to(batch.input.device)
+
+        t = self.ts.view(batch_size, 1, 1, 1) / self.max_steps
+        self.x0s = self.source_noise(batch.input)
+        self.xts = self.x0s * (1 - t) + t * batch.tgt
+        self.bs = batch.tgt - self.x0s
+
+        return batch
+
+    def sample(self, batch):
+        batch_size = batch.input.size()[0]
+
+        batch = self.mask_batch(batch)
+        batch_input = batch.input.cuda()
+
+        self.xts = self.source_noise(batch.input)
+
+        returns = []
+
+        for t in tqdm(range(self.max_steps), position=1):
+            self.ts = torch.ones((batch_size,)).type(torch.int).to(batch_input.device) * t
+            out = self.solver(xt=self.xts.nan_to_num().to(batch_input.device), y=batch_input.nan_to_num(), t=self.ts.to(batch_input.device))
+
+            self.xts += (out.detach().cpu() / self.max_steps)
+            del out
+            del self.ts
+            torch.cuda.empty_cache()
+            if t % 20 == 0:
+                returns.append(self.xts.clone())
+
+        returns.append(self.xts.clone())
+        return returns
+
+
+class GenFlowLitSyncedGaussian(GenFlowLitSynced, GaussianSourceFlowMixin):
+    """GenFlowLitSynced (losses synced over GPUs) with a N(0, I) source."""
+
+
+class GenFlowLitSyncedSparseTgtGaussian(GenFlowLitSyncedSparseTgt, GaussianSourceFlowMixin):
+    """
+    GenFlowLitSyncedSparseTgt (L3 target, loss at observed pixels) with a
+    N(0, I) source; off the tracks x_t is still (1 - t) * x0.
+    """
