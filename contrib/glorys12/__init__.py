@@ -493,3 +493,68 @@ def load_from_cfg(cfg_path, key):
     cfg = OmegaConf.load(Path(cfg_path))
     node = OmegaConf.select(cfg, key)
     return hydra.utils.call(node)
+
+
+# Track dropout (data augmentation for OSE training on real observations)
+# ------------------------------------------------------------------------
+# On real data each date has a single set of observations, so the model sees
+# exactly the same input at every epoch and memorizes it (the L3-target run
+# overfitted after ~70 epochs). Removing random parts of the input tracks
+# each time a window is drawn makes every draw different. The gridded L3
+# product has no satellite id, so "tracks" are removed as random
+# block_deg x block_deg blocks independently per day (whole track segments).
+
+
+class LazyXrDatasetOSETrackDropout(LazyXrDatasetOSE):
+    """
+    LazyXrDatasetOSE whose input loses a random fraction `drop_frac` of
+    block_deg x block_deg blocks per day (set to NaN), redrawn at every
+    __getitem__. The target is left unchanged.
+    """
+
+    def __init__(self, ds, *args, drop_frac=0.3, block_deg=4.0, **kwargs):
+        super().__init__(ds, *args, **kwargs)
+        self.drop_frac = drop_frac
+        res = float(abs(self.ds.lat.values[1] - self.ds.lat.values[0]))
+        self.block = max(1, int(round(block_deg / res)))
+
+    def __getitem__(self, item):
+        out = super().__getitem__(item)
+        if self.return_coords or self.drop_frac <= 0:
+            return out
+        inp = out.input
+        nt, nlat, nlon = inp.shape
+        rng = np.random.default_rng()
+        nby, nbx = -(-nlat // self.block), -(-nlon // self.block)
+        keep = rng.random((nt, nby, nbx)) >= self.drop_frac
+        keep = np.repeat(np.repeat(keep, self.block, axis=1), self.block, axis=2)[:, :nlat, :nlon]
+        return out._replace(input=np.where(keep, inp, np.nan).astype(inp.dtype))
+
+
+class DistinctNormDataModuleOSETrackDropout(DistinctNormDataModuleOSE):
+    """
+    DistinctNormDataModuleOSE with track dropout on the training set only
+    (validation unchanged, so val_loss stays measured on the full input).
+    """
+
+    def __init__(self, *args, track_drop_frac=0.3, track_block_deg=4.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.track_drop_frac = track_drop_frac
+        self.track_block_deg = track_block_deg
+
+    def setup(self, stage="test"):
+        tgt_da, obs_da = self.input_da, self.input_mask
+        for phase in ("train", "val"):
+            kwargs = dict(
+                **self.xrds_kw[phase],
+                postpro_fn=self.post_fn(phase),
+                tgt_da=None if tgt_da is obs_da else tgt_da.sel(self.domains[phase]),
+            )
+            if phase == "train":
+                ds = LazyXrDatasetOSETrackDropout(
+                    obs_da.sel(self.domains[phase]), drop_frac=self.track_drop_frac,
+                    block_deg=self.track_block_deg, **kwargs,
+                )
+            else:
+                ds = LazyXrDatasetOSE(obs_da.sel(self.domains[phase]), **kwargs)
+            setattr(self, f"{phase}_ds", ds)

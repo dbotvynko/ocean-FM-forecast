@@ -1,0 +1,37 @@
+# @package _global_
+#
+# Run A against the L3-target overfitting: fine-tune the L3-target xp from its
+# best checkpoint (epoch 67, before it overfitted) with random track dropout
+# on the training input (contrib.glorys12.DistinctNormDataModuleOSETrackDropout:
+# 30% of 4deg x 4deg blocks removed per day, redrawn for every window; target
+# and validation unchanged).
+# Weights only (contrib.generative.train_utils.warm_start_training): fresh
+# Adam state, lr 5e-5 cosine-annealed to 0 over 100 epochs. Data, norm stats,
+# split, UNet and uniform U[0, 1) flow source unchanged.
+
+defaults:
+  - forecast_DDPM_UNet_1patch_nocoords_matched_ose_l3tgt
+  - _self_
+
+init_ckpt: /Odyssey/private/d21botvy/forecast/ocean-DDPMs/outputs/2026-10-02/22-15-56/forecast_DDPM_UNet_1patch_nocoords_matched_ose_l3tgt/checkpoints/val_loss=0.08120-epoch=067.ckpt
+
+trainer:
+  max_epochs: 100
+
+datamodule:
+  _target_: contrib.glorys12.DistinctNormDataModuleOSETrackDropout
+  track_drop_frac: 0.3
+  track_block_deg: 4.0
+
+model:
+  opt_fn:
+    lr: 5e-5
+
+entrypoints:
+  - _target_: pytorch_lightning.seed_everything
+    seed: 333
+  - _target_: contrib.generative.train_utils.warm_start_training
+    trainer: ${trainer}
+    lit_mod: ${model}
+    dm: ${datamodule}
+    init_ckpt: ${init_ckpt}

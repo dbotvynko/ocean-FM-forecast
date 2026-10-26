@@ -1,0 +1,23 @@
+# @package _global_
+#
+# Run B: run A (fine-tuning from L3-target epoch 67 with track dropout) plus
+#   - 2020-2022 added to training: train 2010-01-01..2022-05-17, validation
+#     moved to 2022-05-18..2022-12-31 (the split must stay contiguous; 2023
+#     is still the test year). Norm stats kept from the epoch-67 model.
+#   - weight decay 1e-4 in Adam (0 before).
+# The L3 file given by the launcher must cover 2010-2022.
+
+defaults:
+  - forecast_DDPM_UNet_1patch_nocoords_matched_ose_l3tgt_ft_trackdrop
+  - _self_
+
+datamodule:
+  domains:
+    train:
+      time: {_target_: builtins.slice, _args_: ['2010-01-01', '2022-05-17']}
+    val:
+      time: {_target_: builtins.slice, _args_: ['2022-05-18', '2022-12-31']}
+
+model:
+  opt_fn:
+    weight_decay: 1e-4
