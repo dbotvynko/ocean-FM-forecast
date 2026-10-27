@@ -1,0 +1,13 @@
+# @package _global_
+#
+# forecast_DDPM_UNet_1patch_nocoords_matched_ose_gauss (Gaussian source,
+# DUACS target) sampled with Heun's method instead of Euler
+# (contrib.generative.models.GenFlowLitSyncedGaussianHeun). Same network and
+# weights: meant for inference from that xp's checkpoints, not for training.
+
+defaults:
+  - forecast_DDPM_UNet_1patch_nocoords_matched_ose_gauss
+  - _self_
+
+model:
+  _target_: contrib.generative.models.GenFlowLitSyncedGaussianHeun

@@ -446,3 +446,66 @@ class GenFlowLitSyncedSparseTgtGaussian(GenFlowLitSyncedSparseTgt, GaussianSourc
     GenFlowLitSyncedSparseTgt (L3 target, loss at observed pixels) with a
     N(0, I) source; off the tracks x_t is still (1 - t) * x0.
     """
+
+
+# Heun (2nd-order) sampler
+# ------------------------
+# sample() above integrates the flow ODE with 100 explicit Euler steps; with
+# a Gaussian source this leaves visible unremoved noise at small scales in the
+# members. Heun's method (predictor-corrector) is second-order accurate for
+# the same number of time steps. It only evaluates the velocity on the integer
+# time grid the network was trained on (t = 0..max_steps-1): the corrector of
+# step t uses the velocity at t + 1, and the last step stays an Euler step
+# since t = max_steps (= 1.0) never appears in training. Cost: about 2x the
+# network evaluations of sample(). Training is unchanged, so models trained
+# with Euler sampling in mind load as they are.
+
+
+class HeunSamplerMixin(GenFlowLit):
+    """
+    sample() with Heun's method instead of Euler. Combine in front of an
+    existing class, e.g. class Foo(HeunSamplerMixin, GenFlowLitSyncedGaussian):
+    the source distribution comes from that class (source_noise() if it has
+    one, U[0, 1) otherwise).
+    """
+
+    def _source(self, like):
+        return self.source_noise(like) if hasattr(self, "source_noise") else torch.rand_like(like)
+
+    def _velocity(self, xt, y, t, batch_size, device):
+        ts = torch.ones((batch_size,), dtype=torch.int, device=device) * t
+        return self.solver(xt=xt.nan_to_num().to(device), y=y, t=ts).detach().cpu()
+
+    def sample(self, batch):
+        batch_size = batch.input.size()[0]
+
+        batch = self.mask_batch(batch)
+        batch_input = batch.input.cuda()
+        device = batch_input.device
+        y = batch_input.nan_to_num()
+
+        self.xts = self._source(batch.input)
+        dt = 1.0 / self.max_steps
+
+        returns = []
+
+        for t in tqdm(range(self.max_steps), position=1):
+            v1 = self._velocity(self.xts, y, t, batch_size, device)
+            if t < self.max_steps - 1:
+                x_pred = self.xts + v1 * dt
+                v2 = self._velocity(x_pred, y, t + 1, batch_size, device)
+                self.xts = self.xts + 0.5 * (v1 + v2) * dt
+                del v2, x_pred
+            else:
+                self.xts = self.xts + v1 * dt
+            del v1
+            torch.cuda.empty_cache()
+            if t % 20 == 0:
+                returns.append(self.xts.clone())
+
+        returns.append(self.xts.clone())
+        return returns
+
+
+class GenFlowLitSyncedGaussianHeun(HeunSamplerMixin, GenFlowLitSyncedGaussian):
+    """GenFlowLitSyncedGaussian sampled with Heun's method (same weights)."""
