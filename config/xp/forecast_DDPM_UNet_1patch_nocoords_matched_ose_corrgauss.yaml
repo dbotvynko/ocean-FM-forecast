@@ -1,0 +1,16 @@
+# @package _global_
+#
+# forecast_DDPM_UNet_1patch_nocoords_matched_ose_gauss (DUACS target, real L3
+# input, Gaussian flow source) with a spatially correlated source: N(0, I)
+# low-pass filtered over lat/lon (Gaussian kernel std 4 grid points ~ 1 deg,
+# ~100 km) and rescaled to unit std, in training and sampling
+# (contrib.generative.models.GenFlowLitSyncedCorrGaussian). Everything else is
+# the Gaussian / uniform OSE xps', so the three are directly comparable.
+
+defaults:
+  - forecast_DDPM_UNet_1patch_nocoords_matched_ose_gauss
+  - _self_
+
+model:
+  _target_: contrib.generative.models.GenFlowLitSyncedCorrGaussian
+  source_corr_px: 4.0

@@ -509,3 +509,37 @@ class HeunSamplerMixin(GenFlowLit):
 
 class GenFlowLitSyncedGaussianHeun(HeunSamplerMixin, GenFlowLitSyncedGaussian):
     """GenFlowLitSyncedGaussian sampled with Heun's method (same weights)."""
+
+
+# Spatially correlated Gaussian source
+# ------------------------------------
+# With a white N(0, I) source the members keep a white-noise plateau below
+# ~80 km: the network does not learn to remove the source noise at scales
+# where the target is unpredictable, so it passes from x0 to the forecast
+# (Heun sampling does not change it, so it is not an ODE error). Here the
+# source is N(0, I) low-pass filtered in space (Gaussian kernel of std
+# `source_corr_px` grid points, applied in Fourier over lat/lon, independently
+# for every day of the window) and rescaled to unit std: the source variance
+# sits at the scales where the forecast is actually uncertain.
+
+
+class CorrelatedGaussianSourceFlowMixin(GaussianSourceFlowMixin):
+    """GaussianSourceFlowMixin whose source is spatially smoothed Gaussian noise."""
+
+    def __init__(self, *args, source_corr_px=4.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.source_corr_px = float(source_corr_px)
+
+    def source_noise(self, like):
+        x = torch.randn_like(like)
+        h, w = x.shape[-2:]
+        ky = torch.fft.fftfreq(h, device=x.device)[:, None]
+        kx = torch.fft.rfftfreq(w, device=x.device)[None, :]
+        transfer = torch.exp(-2 * (torch.pi * self.source_corr_px) ** 2 * (kx ** 2 + ky ** 2))
+        x = torch.fft.irfft2(torch.fft.rfft2(x) * transfer, s=(h, w))
+        std = x.flatten(-2).std(dim=-1, keepdim=True).unsqueeze(-1)
+        return x / std
+
+
+class GenFlowLitSyncedCorrGaussian(GenFlowLitSynced, CorrelatedGaussianSourceFlowMixin):
+    """GenFlowLitSynced (DUACS-target OSE) with a spatially correlated Gaussian source."""
